@@ -31,7 +31,8 @@
     "plugins": [
       "expo-router",
       "expo-status-bar",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-audio"
     ],
     "scheme": "seslikitap",
     "experiments": {

@@ -1,7 +1,7 @@
 import * as Speech from 'expo-speech';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { getSection, savePosition, type Position, type Section } from '@/db/database';
-import { toParagraphs, type Paragraph } from '@/lib/text';
+import { speechLocale, toParagraphs, type Paragraph } from '@/lib/text';
 
 // Sentences queued ahead of the one being spoken, so speech keeps flowing if JS is throttled in the background.
 const LOOKAHEAD = 6;
@@ -144,9 +144,10 @@ export class Narrator {
       const { language, rate, voice } = this.voice;
       this.queuedUntil = i;
       Speech.speak(current.sentences[i], {
-        language,
+        language: speechLocale(language),
         rate,
         voice: voice ?? undefined,
+        useApplicationAudioSession: true,
         onStart: () => {
           if (session !== this.session) return;
           if (this.state.sleepAt && Date.now() >= this.state.sleepAt) {

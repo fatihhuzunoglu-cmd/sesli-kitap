@@ -1,4 +1,6 @@
 import { Alert, Pressable, Text, View } from 'react-native';
+import { useEffect } from 'react';
+import { setAudioModeAsync } from 'expo-audio';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import { SQLiteProvider } from 'expo-sqlite';
 import { StatusBar } from 'expo-status-bar';
@@ -30,6 +32,10 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 
 export default function RootLayout() {
   const t = useTheme();
+  useEffect(() => {
+    // Playback category: speech is audible with the silent switch on and keeps going when the screen locks.
+    void setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
+  }, []);
   return (
     <SQLiteProvider databaseName="library.db" onInit={migrate}>
       <ExtractorProvider>

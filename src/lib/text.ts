@@ -52,6 +52,15 @@ export function toParagraphs(text: string): Paragraph[] {
   return paragraphs;
 }
 
+const SPEECH_LOCALES: Record<string, string> = {
+  tr: 'tr-TR', en: 'en-US', de: 'de-DE', fr: 'fr-FR', es: 'es-ES', it: 'it-IT', ru: 'ru-RU', ar: 'ar-SA',
+};
+
+// iOS resolves voices from full locales ("tr-TR"); a bare "tr" can silently fall back to another voice.
+export function speechLocale(code: string): string {
+  return SPEECH_LOCALES[code] ?? code;
+}
+
 const TURKISH_CHARS = /[ğışĞİŞ]/g;
 const TURKISH_WORDS = /\b(ve|bir|bu|da|de|için|ile|çok|ama|gibi|olarak|daha|ne|kadar)\b/gi;
 const ENGLISH_WORDS = /\b(the|and|of|to|is|in|that|it|was|for|with|as|his|her)\b/gi;

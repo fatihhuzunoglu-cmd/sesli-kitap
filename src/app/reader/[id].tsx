@@ -7,7 +7,7 @@ import * as Speech from 'expo-speech';
 import { getBook, getPosition, getSectionTitles, getSetting, setSetting, updateBook, type Book } from '@/db/database';
 import { useBooksChanged } from '@/engine/booksEvents';
 import { useNarrator } from '@/tts/useNarrator';
-import type { Paragraph } from '@/lib/text';
+import { speechLocale, type Paragraph } from '@/lib/text';
 import { useTheme, type Theme } from '@/ui/theme';
 
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
@@ -364,7 +364,7 @@ function VoiceModal({ visible, language, voice, theme, onClose, onLanguage, onVo
               style={[s.tocItem, item.identifier === voice && { backgroundColor: theme.highlight }]}
               onPress={() => {
                 onVoice(item.identifier);
-                Speech.speak(language === 'tr' ? 'Merhaba, bu sesle okuyacağım.' : 'Hello, I will read with this voice.', { voice: item.identifier, language });
+                Speech.speak(language === 'tr' ? 'Merhaba, bu sesle okuyacağım.' : 'Hello, I will read with this voice.', { voice: item.identifier, language: speechLocale(language), useApplicationAudioSession: true });
               }}
             >
               <Text style={s.tocText} numberOfLines={1}>
