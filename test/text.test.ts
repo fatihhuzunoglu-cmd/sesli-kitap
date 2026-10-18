@@ -33,3 +33,19 @@ test('guesses language from metadata first, then from text', () => {
   assert.equal(guessLanguage('Bu bir kitap ve çok güzel, ağaçlar yeşil.'), 'tr');
   assert.equal(guessLanguage('This is the book and it was in the house.'), 'en');
 });
+
+import { applyPronunciations } from '../src/lib/text.ts';
+
+test('pronunciation dictionary replaces whole words with Turkish casing', () => {
+  const list = [
+    { from: 'Dr.', to: 'Doktor' },
+    { from: 'İstanbul', to: 'İstanbul şehri' },
+    { from: 'Shakespeare', to: 'Şekspir' },
+    { from: 'New York', to: 'Nüyork' },
+  ];
+  assert.equal(applyPronunciations('SHAKESPEARE ve shakespeareci', list), 'Şekspir ve shakespeareci');
+  assert.equal(applyPronunciations('istanbul güzel', list), 'İstanbul şehri güzel');
+  assert.equal(applyPronunciations('Dr. Ali geldi', list), 'Doktor Ali geldi');
+  assert.equal(applyPronunciations('New   York gezisi', list), 'Nüyork gezisi');
+  assert.equal(applyPronunciations('hiçbiri', []), 'hiçbiri');
+});

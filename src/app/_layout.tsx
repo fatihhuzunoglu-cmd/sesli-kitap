@@ -4,8 +4,10 @@ import { setAudioModeAsync } from 'expo-audio';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import { SQLiteProvider } from 'expo-sqlite';
 import { StatusBar } from 'expo-status-bar';
+import type { SQLiteDatabase } from 'expo-sqlite';
 import { migrate } from '@/db/database';
 import { ExtractorProvider } from '@/engine/ExtractorProvider';
+import { loadPrefs } from '@/ui/prefs';
 import { useTheme } from '@/ui/theme';
 
 // Release builds terminate on uncaught JS errors; show the message instead so it can be reported.
@@ -30,6 +32,11 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   );
 }
 
+async function init(db: SQLiteDatabase) {
+  await migrate(db);
+  await loadPrefs(db);
+}
+
 export default function RootLayout() {
   const t = useTheme();
   useEffect(() => {
@@ -37,9 +44,9 @@ export default function RootLayout() {
     void setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
   }, []);
   return (
-    <SQLiteProvider databaseName="library.db" onInit={migrate}>
+    <SQLiteProvider databaseName="library.db" onInit={init}>
       <ExtractorProvider>
-        <StatusBar style="auto" />
+        <StatusBar style={t.dark ? 'light' : 'dark'} />
         <Stack
           screenOptions={{
             headerStyle: { backgroundColor: t.bg },
@@ -50,6 +57,8 @@ export default function RootLayout() {
         >
           <Stack.Screen name="index" options={{ title: 'Kitaplığım' }} />
           <Stack.Screen name="reader/[id]" options={{ title: '' }} />
+          <Stack.Screen name="voices" options={{ title: 'Sesler' }} />
+          <Stack.Screen name="settings" options={{ title: 'Ayarlar' }} />
         </Stack>
       </ExtractorProvider>
     </SQLiteProvider>

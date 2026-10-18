@@ -1,0 +1,106 @@
+appId: com.fatihuzunoglu.seslikitap
+name: PDF ekle, sesli oku, duraklat, atla, ara ve kaldığı yerden devam et
+---
+- launchApp:
+    clearState: true
+- takeScreenshot: ${OUT}/01-empty-library
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-url"
+- tapOn:
+    id: "url-input"
+- inputText: "${SERVER}/mavi-defter.pdf"
+- hideKeyboard
+- tapOn:
+    id: "url-submit"
+- extendedWaitUntil:
+    visible:
+      text: "%0 · 3 sayfa.*"
+    timeout: 90000
+- assertVisible: "Mavi Defter"
+- takeScreenshot: ${OUT}/02-library-with-pdf
+- tapOn:
+    id: "book-card"
+- extendedWaitUntil:
+    visible:
+      text: "Sayfa 1/3 · Cümle 1/3.*"
+    timeout: 30000
+- takeScreenshot: ${OUT}/03-reader
+- tapOn:
+    id: "play-button"
+- extendedWaitUntil:
+    visible:
+      text: ".*Cümle 2/3.*"
+    timeout: 90000
+- takeScreenshot: ${OUT}/04-reading-sentence-2
+- tapOn:
+    id: "play-button"
+- tapOn:
+    id: "next-sentence"
+- assertVisible:
+    text: ".*Cümle 3/3.*"
+- tapOn:
+    id: "prev-sentence"
+- assertVisible:
+    text: ".*Cümle 2/3.*"
+# Page 2 is blank: next page skips straight past it when read aloud, but the user can still open it.
+- tapOn:
+    id: "next-section"
+- assertVisible:
+    id: "empty-section"
+- takeScreenshot: ${OUT}/05-blank-page
+- tapOn:
+    id: "next-section"
+- assertVisible:
+    text: "Sayfa 3/3.*"
+- tapOn:
+    id: "toc-button"
+- tapOn:
+    id: "tab-search"
+- tapOn:
+    id: "search-input"
+- inputText: "kütüphane"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible:
+      id: "search-hit"
+    timeout: 15000
+- takeScreenshot: ${OUT}/06-search
+- tapOn:
+    id: "search-hit"
+    index: 0
+- assertVisible:
+    text: "Sayfa 1/3 · Cümle 2/3.*"
+- tapOn:
+    id: "bookmark-button"
+- tapOn:
+    id: "speed-button"
+- tapOn:
+    id: "rate-1.5"
+- assertVisible: "Okuma hızı · 1.5×"
+- tapOn:
+    id: "sheet-close"
+- tapOn:
+    id: "appearance-button"
+- tapOn:
+    id: "theme-sepia"
+- takeScreenshot: ${OUT}/07-appearance-sepia
+- tapOn:
+    id: "sheet-close"
+- stopApp
+- launchApp
+- tapOn:
+    id: "book-card"
+- extendedWaitUntil:
+    visible:
+      text: "Sayfa 1/3 · Cümle 2/3.*"
+    timeout: 30000
+- assertVisible: "1.5×"
+- takeScreenshot: ${OUT}/08-resumed
+- tapOn:
+    id: "toc-button"
+- tapOn:
+    id: "tab-bookmarks"
+- assertVisible: "Elif her sabah kütüphaneye gider.*"
+- takeScreenshot: ${OUT}/09-bookmarks

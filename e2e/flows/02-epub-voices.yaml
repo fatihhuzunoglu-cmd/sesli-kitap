@@ -1,0 +1,50 @@
+appId: com.fatihuzunoglu.seslikitap
+name: EPUB ekle, ses seç, bölümler arası kesintisiz okuma
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-url"
+- tapOn:
+    id: "url-input"
+- inputText: "${SERVER}/lighthouse.epub"
+- hideKeyboard
+- tapOn:
+    id: "url-submit"
+- extendedWaitUntil:
+    visible:
+      text: "%0 · 2 bölüm.*"
+    timeout: 90000
+- assertVisible: "The Lighthouse Keeper"
+- tapOn:
+    id: "book-card"
+- extendedWaitUntil:
+    visible:
+      text: "Bölüm 1/2 · Cümle 1/3.*"
+    timeout: 30000
+- assertVisible: "English"
+- tapOn:
+    id: "voice-button"
+- extendedWaitUntil:
+    visible: "Sistem varsayılanı"
+    timeout: 20000
+- takeScreenshot: ${OUT}/10-voices-en
+- back
+- tapOn:
+    id: "next-sentence"
+- tapOn:
+    id: "next-sentence"
+- assertVisible:
+    text: "Bölüm 1/2 · Cümle 3/3.*"
+- tapOn:
+    id: "play-button"
+# Reading must flow from the last sentence of chapter one into chapter two on its own.
+- extendedWaitUntil:
+    visible:
+      text: "Bölüm 2/2.*"
+    timeout: 90000
+- takeScreenshot: ${OUT}/11-chapter-two
+- tapOn:
+    id: "play-button"

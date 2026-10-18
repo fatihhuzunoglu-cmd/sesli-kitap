@@ -3,7 +3,7 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
-ios/
-android/
+/ios/
+/android/
 src/engine/engineHtml.generated.ts
 *.log

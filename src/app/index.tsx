@@ -1,22 +1,31 @@
-import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { deleteBook, listBooks, type Book } from '@/db/database';
 import { useExtractor } from '@/engine/ExtractorProvider';
 import { useBooksChanged } from '@/engine/booksEvents';
-import { deleteBookFile, NOT_YET_SUPPORTED, pickAndImportBooks } from '@/lib/importBooks';
+import { deleteBookFile, importFromUrl, importText, NOT_YET_SUPPORTED, pickAndImportBooks, SUPPORTED_LABEL } from '@/lib/importBooks';
+import { Sheet } from '@/ui/Sheet';
 import { useTheme, type Theme } from '@/ui/theme';
+
+type AddMode = null | 'menu' | 'url' | 'text';
 
 export default function Library() {
   const db = useSQLiteContext();
   const t = useTheme();
-  const s = styles(t);
+  const s = useMemo(() => styles(t), [t]);
   const { enqueue } = useExtractor();
   const { width } = useWindowDimensions();
   const columns = width >= 1000 ? 3 : width >= 640 ? 2 : 1;
   const [books, setBooks] = useState<Book[] | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<AddMode>(null);
+  const [filter, setFilter] = useState('');
+  const [url, setUrl] = useState('');
+  const [pasteTitle, setPasteTitle] = useState('');
+  const [pasteText, setPasteText] = useState('');
 
   const refresh = useCallback(() => {
     void listBooks(db).then(setBooks);
@@ -25,24 +34,53 @@ export default function Library() {
   useFocusEffect(refresh);
   useBooksChanged(refresh);
 
-  const addBooks = useCallback(async () => {
-    setImporting(true);
+  const run = async (job: () => Promise<string[]>) => {
+    setBusy(true);
     try {
-      const { imported, rejected } = await pickAndImportBooks(db);
-      imported.forEach(enqueue);
+      const ids = await job();
+      ids.forEach(enqueue);
       refresh();
+      setMode(null);
+    } catch (e) {
+      Alert.alert('Kitap eklenemedi', (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // iOS cannot present the document picker while the sheet's modal is still on screen.
+  const addFromFiles = () => {
+    setMode(null);
+    setTimeout(() => void pickFiles(), 450);
+  };
+
+  const pickFiles = () =>
+    run(async () => {
+      const { imported, rejected } = await pickAndImportBooks(db);
       if (rejected.length) {
         Alert.alert(
           'Bazı dosyalar eklenemedi',
-          `${rejected.join(', ')}\n\nŞu an desteklenen biçimler: PDF, EPUB, TXT, FB2, HTML.\n${NOT_YET_SUPPORTED.slice(0, 4).join(', ').toUpperCase()} desteği sonraki sürümde gelecek.`,
+          `${rejected.join(', ')}\n\nDesteklenen biçimler: ${SUPPORTED_LABEL}.\n${NOT_YET_SUPPORTED.slice(0, 5).join(', ').toUpperCase()} desteği yakında.`,
         );
       }
-    } catch (e) {
-      Alert.alert('Dosya eklenemedi', (e as Error).message);
-    } finally {
-      setImporting(false);
-    }
-  }, [db, enqueue, refresh]);
+      return imported;
+    });
+
+  const addFromUrl = () =>
+    run(async () => {
+      const id = await importFromUrl(db, url);
+      setUrl('');
+      return [id];
+    });
+
+  const addFromText = () =>
+    run(async () => {
+      if (pasteText.trim().length < 2) throw new Error('Lütfen okunacak metni yapıştırın.');
+      const id = await importText(db, pasteTitle, pasteText);
+      setPasteText('');
+      setPasteTitle('');
+      return [id];
+    });
 
   const open = (b: Book) => {
     if (b.status === 'error') {
@@ -57,7 +95,7 @@ export default function Library() {
   };
 
   const confirmDelete = (b: Book) => {
-    Alert.alert('Kitabı sil', `"${b.title}" kitaplığınızdan ve cihazdan silinsin mi?`, [
+    Alert.alert('Kitabı sil', `“${b.title}” kitaplığınızdan ve cihazdan silinsin mi?`, [
       { text: 'Vazgeç', style: 'cancel' },
       {
         text: 'Sil',
@@ -71,13 +109,24 @@ export default function Library() {
     ]);
   };
 
+  const visible = useMemo(() => {
+    const q = filter.trim().toLocaleLowerCase('tr');
+    if (!books || !q) return books;
+    return books.filter((b) => `${b.title} ${b.author ?? ''}`.toLocaleLowerCase('tr').includes(q));
+  }, [books, filter]);
+
   return (
     <View style={s.root}>
       <Stack.Screen
         options={{
+          headerLeft: () => (
+            <Pressable onPress={() => router.push('/settings')} hitSlop={12} accessibilityLabel="Ayarlar" testID="settings-button">
+              <Ionicons name="settings-outline" size={24} color={t.text} />
+            </Pressable>
+          ),
           headerRight: () => (
-            <Pressable onPress={addBooks} disabled={importing} hitSlop={12} accessibilityRole="button" accessibilityLabel="Kitap ekle">
-              {importing ? <ActivityIndicator color={t.accent} /> : <Text style={s.addText}>+ Ekle</Text>}
+            <Pressable onPress={() => setMode('menu')} disabled={busy} hitSlop={12} accessibilityRole="button" accessibilityLabel="Kitap ekle" testID="add-button">
+              {busy ? <ActivityIndicator color={t.accent} /> : <Ionicons name="add" size={30} color={t.accent} />}
             </Pressable>
           ),
         }}
@@ -86,28 +135,100 @@ export default function Library() {
         <ActivityIndicator style={{ marginTop: 48 }} color={t.accent} />
       ) : books.length === 0 ? (
         <View style={s.empty}>
+          <Ionicons name="headset-outline" size={56} color={t.accent} />
           <Text style={s.emptyTitle}>Kitaplığınız boş</Text>
           <Text style={s.emptyBody}>
-            PDF, EPUB, TXT, FB2 veya HTML dosyası ekleyin. Kitaplar sesli okunur ve kaldığınız cümle otomatik kaydedilir.
+            {SUPPORTED_LABEL} dosyası, bir bağlantı ya da yapıştırdığınız bir metni ekleyin. Kitaplar seçtiğiniz sesle okunur ve kaldığınız cümle kaydedilir.
           </Text>
-          <Pressable style={s.primary} onPress={addBooks} accessibilityRole="button">
+          <Pressable style={s.primary} onPress={() => setMode('menu')} accessibilityRole="button" testID="empty-add">
             <Text style={s.primaryText}>Kitap ekle</Text>
           </Pressable>
         </View>
       ) : (
         <FlatList
           key={columns}
-          data={books}
+          data={visible ?? []}
           numColumns={columns}
           keyExtractor={(b) => b.id}
           contentContainerStyle={s.list}
           columnWrapperStyle={columns > 1 ? { gap: 12 } : undefined}
-          renderItem={({ item }) => (
-            <BookCard book={item} theme={t} onPress={() => open(item)} onLongPress={() => confirmDelete(item)} />
-          )}
+          keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={
+            books.length > 3 ? (
+              <View style={s.filter}>
+                <Ionicons name="search" size={18} color={t.muted} />
+                <TextInput value={filter} onChangeText={setFilter} placeholder="Kitaplıkta ara" placeholderTextColor={t.muted} style={s.filterInput} />
+              </View>
+            ) : undefined
+          }
+          renderItem={({ item }) => <BookCard book={item} theme={t} onPress={() => open(item)} onLongPress={() => confirmDelete(item)} />}
         />
       )}
+
+      <Sheet visible={mode === 'menu'} title="Kitap ekle" onClose={() => setMode(null)}>
+        <View style={{ paddingHorizontal: 16, gap: 8 }}>
+          <MenuItem theme={t} icon="document-text-outline" title="Dosyadan" body={SUPPORTED_LABEL} onPress={addFromFiles} testID="add-file" />
+          <MenuItem theme={t} icon="link-outline" title="Bağlantıdan" body="İnternetteki bir kitap dosyasını indirin" onPress={() => setMode('url')} testID="add-url" />
+          <MenuItem theme={t} icon="clipboard-outline" title="Metin yapıştır" body="Bir yazıyı, makaleyi ya da notu dinleyin" onPress={() => setMode('text')} testID="add-text" />
+        </View>
+      </Sheet>
+
+      <Sheet visible={mode === 'url'} title="Bağlantıdan ekle" onClose={() => setMode(null)}>
+        <View style={{ paddingHorizontal: 16, gap: 12 }}>
+          <TextInput
+            value={url}
+            onChangeText={setUrl}
+            placeholder="https://…/kitap.pdf"
+            placeholderTextColor={t.muted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            style={s.input}
+            onSubmitEditing={addFromUrl}
+            testID="url-input"
+          />
+          <Pressable style={s.primary} onPress={addFromUrl} disabled={busy} testID="url-submit">
+            {busy ? <ActivityIndicator color={t.accentText} /> : <Text style={s.primaryText}>İndir ve ekle</Text>}
+          </Pressable>
+        </View>
+      </Sheet>
+
+      <Sheet visible={mode === 'text'} title="Metin yapıştır" onClose={() => setMode(null)} tall>
+        <View style={{ paddingHorizontal: 16, gap: 12, flex: 1 }}>
+          <TextInput value={pasteTitle} onChangeText={setPasteTitle} placeholder="Başlık (isteğe bağlı)" placeholderTextColor={t.muted} style={s.input} testID="paste-title" />
+          <TextInput
+            value={pasteText}
+            onChangeText={setPasteText}
+            placeholder="Okunacak metni buraya yapıştırın…"
+            placeholderTextColor={t.muted}
+            multiline
+            textAlignVertical="top"
+            style={[s.input, { flex: 1, minHeight: 160 }]}
+            testID="paste-text"
+          />
+          <Pressable style={s.primary} onPress={addFromText} disabled={busy} testID="paste-submit">
+            <Text style={s.primaryText}>Ekle</Text>
+          </Pressable>
+        </View>
+      </Sheet>
     </View>
+  );
+}
+
+function MenuItem({ theme, icon, title, body, onPress, testID }: { theme: Theme; icon: keyof typeof Ionicons.glyphMap; title: string; body: string; onPress: () => void; testID?: string }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      testID={testID}
+      style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, padding: 14, borderRadius: 14, backgroundColor: theme.bg, opacity: pressed ? 0.7 : 1 })}
+    >
+      <Ionicons name={icon} size={26} color={theme.accent} />
+      <View style={{ flex: 1 }}>
+        <Text style={{ color: theme.text, fontSize: 16, fontWeight: '600' }}>{title}</Text>
+        <Text style={{ color: theme.muted, fontSize: 13 }}>{body}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={theme.muted} />
+    </Pressable>
   );
 }
 
@@ -117,9 +238,7 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
   const unit = book.format === 'pdf' ? 'sayfa' : 'bölüm';
   let status: string;
   if (processing) {
-    status = book.sectionCount
-      ? `Hazırlanıyor… ${book.processedCount}/${book.sectionCount} ${unit}`
-      : 'Hazırlanıyor…';
+    status = book.sectionCount ? `Hazırlanıyor… ${book.processedCount}/${book.sectionCount} ${unit}` : 'Hazırlanıyor…';
   } else if (book.status === 'error') {
     status = 'Hata — dokunun';
   } else {
@@ -134,6 +253,7 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
       onLongPress={onLongPress}
       accessibilityRole="button"
       accessibilityHint="Açmak için dokunun, silmek için basılı tutun"
+      testID="book-card"
     >
       <View style={s.cardTop}>
         <Text style={s.badge}>{book.format.toUpperCase()}</Text>
@@ -150,7 +270,9 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
       <View style={s.track}>
         <View style={[s.fill, { width: `${Math.round(bar * 100)}%` }]} />
       </View>
-      <Text style={[s.status, book.status === 'error' && { color: theme.danger }]}>{status}</Text>
+      <Text style={[s.status, book.status === 'error' && { color: theme.danger }]} testID="book-status">
+        {status}
+      </Text>
     </Pressable>
   );
 }
@@ -158,13 +280,15 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
 const styles = (t: Theme) =>
   StyleSheet.create({
     root: { flex: 1, backgroundColor: t.bg },
-    addText: { color: t.accent, fontSize: 17, fontWeight: '600' },
     list: { padding: 16, gap: 12 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12 },
     emptyTitle: { fontSize: 22, fontWeight: '700', color: t.text },
-    emptyBody: { fontSize: 16, color: t.muted, textAlign: 'center', lineHeight: 23, maxWidth: 420 },
-    primary: { backgroundColor: t.accent, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12, marginTop: 8 },
+    emptyBody: { fontSize: 16, color: t.muted, textAlign: 'center', lineHeight: 23, maxWidth: 440 },
+    primary: { backgroundColor: t.accent, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12, marginTop: 8, alignItems: 'center' },
     primaryText: { color: t.accentText, fontSize: 17, fontWeight: '600' },
+    input: { borderWidth: 1, borderColor: t.border, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, color: t.text, backgroundColor: t.bg, fontSize: 16 },
+    filter: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, marginBottom: 4 },
+    filterInput: { flex: 1, color: t.text, fontSize: 16, paddingVertical: 10 },
     card: { flex: 1, backgroundColor: t.surface, borderRadius: 14, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: t.border, gap: 6 },
     cardTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     badge: { fontSize: 11, fontWeight: '700', color: t.accent, letterSpacing: 0.8 },

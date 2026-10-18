@@ -74,3 +74,31 @@ export function guessLanguage(sample: string, metadataLanguage?: string | null):
   const en = sample.match(ENGLISH_WORDS)?.length ?? 0;
   return tr >= en ? 'tr' : 'en';
 }
+
+export type Pronunciation = { from: string; to: string };
+
+const WORD = /[0-9A-Za-zÇĞİÖŞÜçğıöşüÂâÎîÛûÄäËëÏïÜüÉéÈèÀàÑñßÆæØøÅå'’-]+/g;
+
+function foldCase(s: string) {
+  return s.toLocaleLowerCase('tr');
+}
+
+// Replaces whole words (case-insensitively, Turkish casing) so the voice says them the way the reader wants.
+export function applyPronunciations(text: string, list: Pronunciation[]): string {
+  if (!list.length) return text;
+  const single = new Map<string, string>();
+  const phrases: Pronunciation[] = [];
+  for (const p of list) {
+    const from = p.from.trim();
+    if (!from) continue;
+    if (from.replace(WORD, '') !== '') phrases.push({ from, to: p.to });
+    else single.set(foldCase(from), p.to);
+  }
+  let out = text;
+  for (const p of phrases) {
+    const escaped = p.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    out = out.replace(new RegExp(escaped, 'gi'), p.to);
+  }
+  if (single.size) out = out.replace(WORD, (w) => single.get(foldCase(w)) ?? w);
+  return out;
+}

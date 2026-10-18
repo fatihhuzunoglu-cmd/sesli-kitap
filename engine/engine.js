@@ -94,43 +94,111 @@
       language: info.Language || null,
       sectionCount: doc.numPages,
     });
+    // Running headers/footers (book title, chapter name, "Sayfa 12") repeat on many pages and should not be read aloud.
+    // Their shape is learned from the top/bottom lines of every page; the first pages are held back until it is known.
+    var counts = {};
+    var seen = 0;
+    var held = [];
+    var warmup = Math.min(8, doc.numPages);
+    // Short lines (page numbers like "— 12 —") match with digits ignored; longer ones only when identical.
+    var norm = function (t) {
+      var c = cleanSpaces(t).toLowerCase();
+      return c.length <= 40 ? c.replace(/\d+/g, '#') : c;
+    };
+    // Top two lines are keyed "t:", bottom two "b:". Real running heads repeat on most pages, chapter titles on few,
+    // so a line only counts as boilerplate once it shows up on 30% of the pages seen so far.
+    var edgeLines = function (lines) {
+      var order = lines
+        .map(function (l, i) {
+          return { i: i, y: l.y };
+        })
+        .sort(function (a, b) {
+          return b.y - a.y;
+        });
+      var picks = {};
+      order.slice(0, 2).forEach(function (o) {
+        picks[o.i] = 't:';
+      });
+      order.slice(-2).forEach(function (o) {
+        picks[o.i] = 'b:';
+      });
+      return picks;
+    };
+    var emit = function (pageNo, lines) {
+      var edges = edgeLines(lines);
+      var threshold = Math.max(2, Math.ceil(seen * 0.3));
+      var kept = lines
+        .filter(function (l, i) {
+          if (!edges[i]) return true;
+          var k = norm(l.text);
+          return !(k.length && k.length < 80 && (counts[edges[i] + k] || 0) >= threshold);
+        })
+        .map(function (l) {
+          return l.text;
+        });
+      var text = linesToParagraphs(kept);
+      post({
+        type: 'section',
+        jobId: job.id,
+        index: pageNo - 1,
+        title: 'Sayfa ' + pageNo,
+        text: text,
+        needsOcr: text.replace(/\s/g, '').length < 20,
+      });
+    };
     for (var p = 1; p <= doc.numPages; p++) {
       if (job.cancelled) return;
-      var text = '';
+      var lines = [];
       try {
         var page = await doc.getPage(p);
         var tc = await page.getTextContent();
-        var lines = [];
         var line = '';
+        var lineY = null;
         var lastY = null;
         tc.items.forEach(function (it) {
           if (typeof it.str !== 'string') return;
           var y = it.transform ? it.transform[5] : null;
           if (lastY !== null && y !== null && Math.abs(y - lastY) > 2 && line) {
-            lines.push(line);
+            lines.push({ text: line, y: lineY });
             line = '';
           }
+          if (!line) lineY = y;
           line += it.str;
           if (it.hasEOL) {
-            lines.push(line);
+            lines.push({ text: line, y: lineY });
             line = '';
           }
           if (y !== null) lastY = y;
         });
-        if (line) lines.push(line);
-        text = linesToParagraphs(lines);
+        if (line) lines.push({ text: line, y: lineY });
+        lines = lines.filter(function (l) {
+          return cleanSpaces(l.text).length > 0;
+        });
         page.cleanup();
       } catch (e) {
-        text = '';
+        lines = [];
       }
-      post({
-        type: 'section',
-        jobId: job.id,
-        index: p - 1,
-        title: 'Sayfa ' + p,
-        text: text,
-        needsOcr: text.replace(/\s/g, '').length < 20,
+      seen++;
+      var edges = edgeLines(lines);
+      var counted = {};
+      lines.forEach(function (l, i) {
+        var k = norm(l.text);
+        if (edges[i] && k && !counted[edges[i] + k]) {
+          counted[edges[i] + k] = true;
+          counts[edges[i] + k] = (counts[edges[i] + k] || 0) + 1;
+        }
       });
+      if (p <= warmup) {
+        held.push({ p: p, lines: lines });
+        if (p === warmup) {
+          held.forEach(function (h) {
+            emit(h.p, h.lines);
+          });
+          held = [];
+        }
+      } else {
+        emit(p, lines);
+      }
     }
     await task.destroy();
   }

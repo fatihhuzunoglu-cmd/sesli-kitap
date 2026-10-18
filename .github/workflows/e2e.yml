@@ -1,0 +1,135 @@
+# Builds release apps, installs them on an Android emulator and an iOS simulator, and drives them with Maestro.
+name: E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - run: npm run build:engine
+      - name: Generate native Android project
+        run: E2E=1 npx expo prebuild --platform android --no-install
+      - name: Build release APK
+        run: cd android && ./gradlew assembleRelease -PreactNativeArchitectures=x86_64,arm64-v8a --no-daemon
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk out/SesliKitap.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SesliKitap-apk
+          path: out/SesliKitap.apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Serve test books
+        run: (cd e2e/fixtures && python3 -m http.server 8000 > /tmp/http.log 2>&1 &)
+      - name: Run flows on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            adb install -r out/SesliKitap.apk
+            mkdir -p e2e-out/android
+            adb shell settings list secure | grep -i tts || true
+            adb shell cmd package list packages | grep -i -E "tts|speech" || true
+            maestro test e2e/flows -e SERVER=http://10.0.2.2:8000 -e OUT=e2e-out/android --format junit --output e2e-out/android/report.xml --test-output-dir e2e-out/android/maestro || echo "MAESTRO_FAILED" > e2e-out/android/FAILED
+            adb logcat -d > e2e-out/android/logcat.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-android
+          path: e2e-out/android
+      - name: Fail if flows failed
+        run: test ! -f e2e-out/android/FAILED
+
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - run: npm run build:engine
+      - name: Generate native iOS project
+        run: E2E=1 npx expo prebuild --platform ios --no-install
+      - name: Install CocoaPods
+        run: cd ios && pod install
+      - name: Build Release app for the simulator
+        run: |
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          set -o pipefail
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build | tail -100
+      - name: Boot simulator
+        run: |
+          UDID=$(xcrun simctl list devices available --json | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8")).devices;
+            const runtimes = Object.keys(d).filter((r) => r.includes("iOS")).sort().reverse();
+            for (const r of runtimes) { const p = d[r].find((x) => /^iPhone \d+( Pro)?$/.test(x.name)); if (p) { console.log(p.udid); break; } }')
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          APP=$(ls -d build/Build/Products/Release-iphonesimulator/*.app | head -1)
+          xcrun simctl install "$UDID" "$APP"
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Serve test books
+        run: (cd e2e/fixtures && python3 -m http.server 8000 > /tmp/http.log 2>&1 &)
+      - name: Run flows on simulator
+        run: |
+          mkdir -p e2e-out/ios
+          maestro --device "$UDID" test e2e/flows -e SERVER=http://127.0.0.1:8000 -e OUT=e2e-out/ios --format junit --output e2e-out/ios/report.xml --test-output-dir e2e-out/ios/maestro || echo "MAESTRO_FAILED" > e2e-out/ios/FAILED
+          xcrun simctl spawn "$UDID" log show --last 20m --style compact --predicate 'process CONTAINS "SesliKitap"' > e2e-out/ios/device.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-ios
+          path: e2e-out/ios
+      - name: Fail if flows failed
+        run: test ! -f e2e-out/ios/FAILED

@@ -54,6 +54,15 @@ const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL
   );
   CREATE TABLE settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);`,
+  `CREATE TABLE bookmarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    section_idx INTEGER NOT NULL,
+    sentence_idx INTEGER NOT NULL,
+    excerpt TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX bookmarks_book ON bookmarks(book_id, section_idx, sentence_idx);`,
 ];
 
 export async function migrate(db: SQLiteDatabase) {
@@ -230,5 +239,57 @@ export async function setSetting(db: SQLiteDatabase, key: string, value: unknown
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
     key,
     JSON.stringify(value),
+  );
+}
+
+export type Bookmark = { id: number; sectionIdx: number; sentenceIdx: number; excerpt: string; sectionTitle: string; createdAt: number };
+
+export async function listBookmarks(db: SQLiteDatabase, bookId: string): Promise<Bookmark[]> {
+  const rows = await db.getAllAsync<{ id: number; section_idx: number; sentence_idx: number; excerpt: string; title: string | null; created_at: number }>(
+    `SELECT m.id, m.section_idx, m.sentence_idx, m.excerpt, s.title, m.created_at
+     FROM bookmarks m LEFT JOIN sections s ON s.book_id = m.book_id AND s.idx = m.section_idx
+     WHERE m.book_id = ? ORDER BY m.section_idx, m.sentence_idx`,
+    bookId,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    sectionIdx: r.section_idx,
+    sentenceIdx: r.sentence_idx,
+    excerpt: r.excerpt,
+    sectionTitle: r.title ?? '',
+    createdAt: r.created_at,
+  }));
+}
+
+export async function addBookmark(db: SQLiteDatabase, bookId: string, pos: Position, excerpt: string) {
+  await db.runAsync(
+    'INSERT INTO bookmarks (book_id, section_idx, sentence_idx, excerpt, created_at) VALUES (?, ?, ?, ?, ?)',
+    bookId,
+    pos.sectionIdx,
+    pos.sentenceIdx,
+    excerpt.slice(0, 280),
+    Date.now(),
+  );
+}
+
+export async function deleteBookmark(db: SQLiteDatabase, id: number) {
+  await db.runAsync('DELETE FROM bookmarks WHERE id = ?', id);
+}
+
+export async function findBookmark(db: SQLiteDatabase, bookId: string, pos: Position) {
+  return db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM bookmarks WHERE book_id = ? AND section_idx = ? AND sentence_idx = ?',
+    bookId,
+    pos.sectionIdx,
+    pos.sentenceIdx,
+  );
+}
+
+export async function getSectionsRange(db: SQLiteDatabase, bookId: string, from: number, to: number) {
+  return db.getAllAsync<{ idx: number; title: string; text: string }>(
+    'SELECT idx, title, text FROM sections WHERE book_id = ? AND idx BETWEEN ? AND ? ORDER BY idx',
+    bookId,
+    from,
+    to,
   );
 }

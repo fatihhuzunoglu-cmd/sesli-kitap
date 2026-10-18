@@ -1,0 +1,31 @@
+appId: com.fatihuzunoglu.seslikitap
+name: Metin yapıştır ve dinle
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-text"
+- tapOn:
+    id: "paste-title"
+- inputText: "Not"
+- tapOn:
+    id: "paste-text"
+- inputText: "Bu bir deneme metnidir. Uygulama bu metni sesli okuyacak. Her cumle sirayla okunur."
+- hideKeyboard
+- tapOn:
+    id: "paste-submit"
+- extendedWaitUntil:
+    visible:
+      text: "%0 · 1 bölüm.*"
+    timeout: 60000
+- tapOn:
+    id: "book-card"
+- tapOn:
+    id: "play-button"
+- extendedWaitUntil:
+    visible:
+      text: ".*Cümle 2/3.*"
+    timeout: 90000
+- takeScreenshot: ${OUT}/12-pasted-text
