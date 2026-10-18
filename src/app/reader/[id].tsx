@@ -86,7 +86,7 @@ function Reader({ book, prefs, setPrefs, onBookChanged }: { book: Book; prefs: P
   };
 
   const currentParagraph = useMemo(() => {
-    if (!section) return -1;
+    if (!section || !section.paragraphs.length) return -1;
     const ps = section.paragraphs;
     for (let i = ps.length - 1; i >= 0; i--) if (ps[i].firstSentence <= position.sentenceIdx) return i;
     return 0;
@@ -100,10 +100,17 @@ function Reader({ book, prefs, setPrefs, onBookChanged }: { book: Book; prefs: P
     const first = scrolledFor.current === '' || !scrolledFor.current.startsWith(`${section.idx}:`);
     scrolledFor.current = key;
     if (!playing && !first) return;
-    requestAnimationFrame(() =>
-      listRef.current?.scrollToIndex({ index: currentParagraph, viewPosition: 0.25, animated: !first }),
-    );
+    const count = section.paragraphs.length;
+    requestAnimationFrame(() => scrollToParagraph(currentParagraph, count, !first));
   }, [ready, section, currentParagraph, playing]);
+
+  // FlatList throws (and crashes release builds) on out-of-range indexes, e.g. pages without text.
+  function scrollToParagraph(index: number, count: number, animated: boolean) {
+    if (index < 0 || index >= count) return;
+    try {
+      listRef.current?.scrollToIndex({ index, viewPosition: 0.25, animated });
+    } catch {}
+  }
 
   const activeSleep = sleepAt === null ? 0 : sleepMinutes;
   const cycleSleep = () => {
@@ -144,7 +151,7 @@ function Reader({ book, prefs, setPrefs, onBookChanged }: { book: Book; prefs: P
           windowSize={11}
           onScrollToIndexFailed={(info) => {
             listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
-            setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0.25, animated: false }), 100);
+            setTimeout(() => scrollToParagraph(info.index, section?.paragraphs.length ?? 0, false), 100);
           }}
           ListEmptyComponent={
             <Text style={s.notice}>
