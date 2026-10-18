@@ -1,0 +1,234 @@
+import type { SQLiteDatabase } from 'expo-sqlite';
+
+export type BookFormat = 'pdf' | 'epub' | 'txt' | 'html' | 'fb2';
+export type BookStatus = 'processing' | 'ready' | 'error';
+
+export type Book = {
+  id: string;
+  title: string;
+  author: string | null;
+  format: BookFormat;
+  fileUri: string;
+  size: number;
+  language: string;
+  sectionCount: number;
+  processedCount: number;
+  ocrPendingCount: number;
+  status: BookStatus;
+  error: string | null;
+  addedAt: number;
+  lastOpenedAt: number | null;
+  progress: number;
+};
+
+export type Section = { idx: number; title: string; text: string; needsOcr: boolean };
+export type Position = { sectionIdx: number; sentenceIdx: number };
+
+const MIGRATIONS: string[] = [
+  `CREATE TABLE books (
+    id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL,
+    author TEXT,
+    format TEXT NOT NULL,
+    file_uri TEXT NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0,
+    language TEXT NOT NULL DEFAULT 'tr',
+    section_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    error TEXT,
+    added_at INTEGER NOT NULL,
+    last_opened_at INTEGER
+  );
+  CREATE TABLE sections (
+    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    text TEXT NOT NULL,
+    needs_ocr INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (book_id, idx)
+  );
+  CREATE TABLE positions (
+    book_id TEXT PRIMARY KEY NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    section_idx INTEGER NOT NULL,
+    sentence_idx INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);`,
+];
+
+export async function migrate(db: SQLiteDatabase) {
+  await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  let version = row?.user_version ?? 0;
+  while (version < MIGRATIONS.length) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(MIGRATIONS[version]);
+    });
+    version++;
+    await db.execAsync(`PRAGMA user_version = ${version}`);
+  }
+  // A book still "processing" at launch was interrupted when the app was closed.
+  await db.runAsync(
+    `UPDATE books SET status = 'error', error = 'İşlem yarıda kaldı. Yeniden işlemek için dokunun.' WHERE status = 'processing'`,
+  );
+}
+
+type BookRow = {
+  id: string;
+  title: string;
+  author: string | null;
+  format: BookFormat;
+  file_uri: string;
+  size: number;
+  language: string;
+  section_count: number;
+  processed_count: number;
+  ocr_pending_count: number;
+  status: BookStatus;
+  error: string | null;
+  added_at: number;
+  last_opened_at: number | null;
+  section_idx: number | null;
+};
+
+const BOOK_SELECT = `
+  SELECT b.*,
+    (SELECT COUNT(*) FROM sections s WHERE s.book_id = b.id) AS processed_count,
+    (SELECT COUNT(*) FROM sections s WHERE s.book_id = b.id AND s.needs_ocr = 1) AS ocr_pending_count,
+    p.section_idx
+  FROM books b LEFT JOIN positions p ON p.book_id = b.id`;
+
+function toBook(r: BookRow): Book {
+  const progress = r.section_count > 0 && r.section_idx != null ? (r.section_idx + 1) / r.section_count : 0;
+  return {
+    id: r.id,
+    title: r.title,
+    author: r.author,
+    format: r.format,
+    fileUri: r.file_uri,
+    size: r.size,
+    language: r.language,
+    sectionCount: r.section_count,
+    processedCount: r.processed_count,
+    ocrPendingCount: r.ocr_pending_count,
+    status: r.status,
+    error: r.error,
+    addedAt: r.added_at,
+    lastOpenedAt: r.last_opened_at,
+    progress,
+  };
+}
+
+export async function listBooks(db: SQLiteDatabase): Promise<Book[]> {
+  const rows = await db.getAllAsync<BookRow>(`${BOOK_SELECT} ORDER BY COALESCE(b.last_opened_at, b.added_at) DESC`);
+  return rows.map(toBook);
+}
+
+export async function getBook(db: SQLiteDatabase, id: string): Promise<Book | null> {
+  const row = await db.getFirstAsync<BookRow>(`${BOOK_SELECT} WHERE b.id = ?`, id);
+  return row ? toBook(row) : null;
+}
+
+export async function insertBook(
+  db: SQLiteDatabase,
+  b: Pick<Book, 'id' | 'title' | 'format' | 'fileUri' | 'size'>,
+) {
+  await db.runAsync(
+    `INSERT INTO books (id, title, format, file_uri, size, status, added_at) VALUES (?, ?, ?, ?, ?, 'processing', ?)`,
+    b.id,
+    b.title,
+    b.format,
+    b.fileUri,
+    b.size,
+    Date.now(),
+  );
+}
+
+export async function updateBook(
+  db: SQLiteDatabase,
+  id: string,
+  fields: Partial<{ title: string; author: string | null; language: string; section_count: number; status: BookStatus; error: string | null; last_opened_at: number }>,
+) {
+  const keys = Object.keys(fields) as (keyof typeof fields)[];
+  if (!keys.length) return;
+  await db.runAsync(
+    `UPDATE books SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+    ...keys.map((k) => fields[k] ?? null),
+    id,
+  );
+}
+
+export async function deleteBook(db: SQLiteDatabase, id: string) {
+  await db.runAsync('DELETE FROM books WHERE id = ?', id);
+}
+
+export async function clearSections(db: SQLiteDatabase, bookId: string) {
+  await db.runAsync('DELETE FROM sections WHERE book_id = ?', bookId);
+}
+
+export async function insertSection(db: SQLiteDatabase, bookId: string, s: Section) {
+  await db.runAsync(
+    'INSERT OR REPLACE INTO sections (book_id, idx, title, text, needs_ocr) VALUES (?, ?, ?, ?, ?)',
+    bookId,
+    s.idx,
+    s.title,
+    s.text,
+    s.needsOcr ? 1 : 0,
+  );
+}
+
+export async function getSection(db: SQLiteDatabase, bookId: string, idx: number): Promise<Section | null> {
+  const r = await db.getFirstAsync<{ idx: number; title: string; text: string; needs_ocr: number }>(
+    'SELECT idx, title, text, needs_ocr FROM sections WHERE book_id = ? AND idx = ?',
+    bookId,
+    idx,
+  );
+  return r ? { idx: r.idx, title: r.title, text: r.text, needsOcr: r.needs_ocr === 1 } : null;
+}
+
+export async function getSectionTitles(db: SQLiteDatabase, bookId: string) {
+  return db.getAllAsync<{ idx: number; title: string; needs_ocr: number }>(
+    'SELECT idx, title, needs_ocr FROM sections WHERE book_id = ? ORDER BY idx',
+    bookId,
+  );
+}
+
+export async function getSampleText(db: SQLiteDatabase, bookId: string): Promise<string> {
+  const rows = await db.getAllAsync<{ text: string }>(
+    `SELECT text FROM sections WHERE book_id = ? AND length(text) > 200 ORDER BY idx LIMIT 5`,
+    bookId,
+  );
+  return rows.map((r) => r.text).join('\n').slice(0, 8000);
+}
+
+export async function getPosition(db: SQLiteDatabase, bookId: string): Promise<Position | null> {
+  const r = await db.getFirstAsync<{ section_idx: number; sentence_idx: number }>(
+    'SELECT section_idx, sentence_idx FROM positions WHERE book_id = ?',
+    bookId,
+  );
+  return r ? { sectionIdx: r.section_idx, sentenceIdx: r.sentence_idx } : null;
+}
+
+export async function savePosition(db: SQLiteDatabase, bookId: string, pos: Position) {
+  await db.runAsync(
+    `INSERT INTO positions (book_id, section_idx, sentence_idx, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(book_id) DO UPDATE SET section_idx = excluded.section_idx, sentence_idx = excluded.sentence_idx, updated_at = excluded.updated_at`,
+    bookId,
+    pos.sectionIdx,
+    pos.sentenceIdx,
+    Date.now(),
+  );
+}
+
+export async function getSetting<T>(db: SQLiteDatabase, key: string, fallback: T): Promise<T> {
+  const r = await db.getFirstAsync<{ value: string }>('SELECT value FROM settings WHERE key = ?', key);
+  return r ? (JSON.parse(r.value) as T) : fallback;
+}
+
+export async function setSetting(db: SQLiteDatabase, key: string, value: unknown) {
+  await db.runAsync(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    key,
+    JSON.stringify(value),
+  );
+}

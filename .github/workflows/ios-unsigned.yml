@@ -1,0 +1,63 @@
+# Builds an unsigned Release .ipa (JS bundle embedded) for sideloading; Sideloadly signs it with the user's Apple ID.
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build extractor engine
+        run: npm run build:engine
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods
+        run: cd ios && pod install
+
+      - name: Build Release app without code signing
+        run: |
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          set -o pipefail
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tail -200
+
+      - name: Package IPA
+        run: |
+          APP=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -1)
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out && zip -qry SesliKitap.ipa Payload
+          ls -la SesliKitap.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SesliKitap-ipa
+          path: out/SesliKitap.ipa
+          retention-days: 30
