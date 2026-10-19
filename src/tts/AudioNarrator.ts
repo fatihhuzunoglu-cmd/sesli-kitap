@@ -9,6 +9,8 @@ import { BaseNarrator } from './BaseNarrator';
 const AHEAD = 8;
 // Status updates right after switching files can still describe the previous one; ignore play/pause changes meanwhile.
 const SWITCH_GRACE_MS = 800;
+// A sentence normally renders in well under a second; past this the system TTS service is assumed stuck.
+const SYNTH_TIMEOUT_MS = 20000;
 
 type Item = { pos: Position; file: File; sectionTitle: string };
 
@@ -111,17 +113,7 @@ export class AudioNarrator extends BaseNarrator {
         const section = (await this.fetch(pos.sectionIdx))!;
         this.cursor = { sectionIdx: pos.sectionIdx, sentenceIdx: pos.sentenceIdx + 1 };
         const file = new File(this.dir, `${session}-${pos.sectionIdx}-${pos.sentenceIdx}.${SpeechFile!.fileExtension}`);
-        let written = false;
-        try {
-          const res = await SpeechFile!.synthesize(this.spoken(section.sentences[pos.sentenceIdx]), file.uri, {
-            voiceId: this.voice.voice,
-            language: speechLocale(this.voice.language),
-            pitch: this.voice.pitch,
-          });
-          written = res.written;
-        } catch {
-          written = false;
-        }
+        const written = await this.render(this.spoken(section.sentences[pos.sentenceIdx]), file);
         if (session !== this.session) {
           safeDelete(file);
           return;
@@ -137,6 +129,20 @@ export class AudioNarrator extends BaseNarrator {
       this.filling = false;
     }
     if (session === this.session && this.atEnd && this.starved && !this.queue.length) this.finish();
+  }
+
+  // Renders one sentence; if the TTS service hangs or dies, restarts it and tries once more before skipping.
+  private async render(text: string, file: File): Promise<boolean> {
+    const options = { voiceId: this.voice.voice, language: speechLocale(this.voice.language), pitch: this.voice.pitch };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await withTimeout(SpeechFile!.synthesize(text, file.uri, options), SYNTH_TIMEOUT_MS);
+        return res.written;
+      } catch {
+        await SpeechFile!.reset().catch(() => {});
+      }
+    }
+    return false;
   }
 
   private advance() {
@@ -207,6 +213,22 @@ export class AudioNarrator extends BaseNarrator {
       this.lockScreenTitle = item.sectionTitle;
     }
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
 }
 
 function samePos(a: Position, b: Position) {

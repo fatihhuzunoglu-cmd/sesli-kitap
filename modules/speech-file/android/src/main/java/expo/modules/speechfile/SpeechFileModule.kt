@@ -62,6 +62,18 @@ class SpeechFileModule : Module() {
       pending.forEach { (_, promise) -> promise.resolve(mapOf("durationMs" to 0.0, "written" to false)) }
     }
 
+    // Recreates the engine, e.g. after the system TTS service was killed or updated mid-session.
+    AsyncFunction("reset") {
+      val pending = jobs.values.toList()
+      jobs.clear()
+      pending.forEach { (_, promise) -> promise.resolve(mapOf("durationMs" to 0.0, "written" to false)) }
+      synchronized(this@SpeechFileModule) {
+        tts?.shutdown()
+        tts = null
+        state = State.IDLE
+      }
+    }
+
     OnDestroy {
       tts?.shutdown()
       tts = null

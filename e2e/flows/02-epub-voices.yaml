@@ -29,7 +29,20 @@ name: EPUB ekle, ses seç, bölümler arası kesintisiz okuma
     visible: ".*Sistem varsayılanı.*"
     timeout: 20000
 - takeScreenshot: ${OUT}/10-voices-en
-- back
+# iOS has no system back button; swipe from the left edge like a user would.
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - swipe:
+          start: "1%, 50%"
+          end: "85%, 50%"
+          duration: 400
 - tapOn:
     id: "next-sentence"
 - tapOn:

@@ -208,5 +208,9 @@ public class SpeechFileModule: Module {
     AsyncFunction("cancelPending") {
       self.writer.cancelAll()
     }
+
+    AsyncFunction("reset") {
+      self.writer.cancelAll()
+    }
   }
 }

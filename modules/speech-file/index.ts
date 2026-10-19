@@ -20,6 +20,7 @@ type SpeechFileNative = {
   getVoices(): Promise<NativeVoice[]>;
   synthesize(text: string, path: string, options: SynthesizeOptions): Promise<SynthesizeResult>;
   cancelPending(): Promise<void>;
+  reset(): Promise<void>;
 };
 
 // Null in Expo Go, where the app falls back to live expo-speech playback.
