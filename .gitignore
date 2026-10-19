@@ -7,3 +7,4 @@ expo-env.d.ts
 /android/
 src/engine/engineHtml.generated.ts
 *.log
+assets/ocr/

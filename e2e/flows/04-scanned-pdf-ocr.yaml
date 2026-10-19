@@ -1,0 +1,39 @@
+appId: com.fatihuzunoglu.seslikitap
+name: Taranmış PDF'i resimden tanı (OCR) ve sesli oku
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-url"
+- tapOn:
+    id: "url-input"
+- inputText: "${SERVER}/taranmis.pdf"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible:
+      text: "Metin tanınıyor.*"
+    timeout: 60000
+- takeScreenshot: ${OUT}/13-ocr-running
+- extendedWaitUntil:
+    visible:
+      text: "%0 · 2 sayfa"
+    timeout: 240000
+- takeScreenshot: ${OUT}/14-ocr-done
+- tapOn:
+    id: "book-card"
+- extendedWaitUntil:
+    visible:
+      text: "Sayfa 1/2 · Cümle 1/2.*"
+    timeout: 30000
+- assertVisible: ".*Elif adında meraklı bir kız.*"
+- takeScreenshot: ${OUT}/15-ocr-reader
+- tapOn:
+    id: "play-button"
+- extendedWaitUntil:
+    visible:
+      text: ".*Cümle 2/2.*"
+    timeout: 90000
+- tapOn:
+    id: "play-button"

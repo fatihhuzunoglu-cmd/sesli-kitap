@@ -23,3 +23,16 @@ export function useBooksChanged(listener: () => void, throttleMs = 700) {
     };
   }, [listener, throttleMs]);
 }
+
+export type OcrProgress = { done: number; total: number };
+const ocrProgress = new Map<string, OcrProgress>();
+
+export function setOcrProgress(bookId: string, progress: OcrProgress | null) {
+  if (progress) ocrProgress.set(bookId, progress);
+  else ocrProgress.delete(bookId);
+  notifyBooksChanged();
+}
+
+export function getOcrProgress(bookId: string) {
+  return ocrProgress.get(bookId);
+}

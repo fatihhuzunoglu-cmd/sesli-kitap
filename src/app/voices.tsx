@@ -155,7 +155,7 @@ export default function VoicesScreen() {
             theme={t}
             title={item.label}
             detail={item.detail}
-            badge={item.quality !== 'default' ? QUALITY_LABEL[item.quality] : undefined}
+            badge={item.quality === 'premium' ? QUALITY_LABEL.premium : undefined}
             selected={item.id === selected}
             previewing={previewing === item.id}
             onPress={() => choose(item)}

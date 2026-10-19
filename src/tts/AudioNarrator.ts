@@ -1,37 +1,39 @@
-import { createAudioPlaylist, type AudioPlaylist, type AudioPlaylistStatus } from 'expo-audio';
+import { createAudioPlayer, type AudioPlayer, type AudioStatus } from 'expo-audio';
 import { Directory, File, Paths } from 'expo-file-system';
 import type { Position } from '@/db/database';
 import { speechLocale } from '@/lib/text';
 import { SpeechFile } from '../../modules/speech-file';
 import { BaseNarrator } from './BaseNarrator';
 
-// Sentences rendered ahead of the one playing: the native queue keeps going for a minute or more even if JS is suspended.
-const AHEAD = 10;
-// Played files kept around so the lock-screen "previous" button still has audio to go back to.
-const KEEP_BEHIND = 4;
+// Sentences rendered ahead of the one playing, so the next file is always ready the moment one ends.
+const AHEAD = 8;
+// Status updates right after switching files can still describe the previous one; ignore play/pause changes meanwhile.
+const SWITCH_GRACE_MS = 800;
 
 type Item = { pos: Position; file: File; sectionTitle: string };
 
-// Renders sentences to audio files and plays them through a native playlist: real pause on every platform,
-// lock-screen and headset controls, background playback and instant speed changes.
+// Renders sentences to audio files and plays them one after another on a single native player.
+// A single player (rather than a growing native playlist) keeps Android's media session consistent,
+// while still giving real pause, lock-screen/headset play-pause, background playback and instant speed changes.
 export class AudioNarrator extends BaseNarrator {
-  private playlist: AudioPlaylist | null = null;
-  private items: Item[] = [];
+  private player: AudioPlayer | null = null;
+  private current: Item | null = null;
+  private queue: Item[] = [];
   private cursor: Position | null = null;
   private filling = false;
   private starved = false;
   private atEnd = false;
-  private dir = new Directory(Paths.cache, 'speech');
+  private switchedAt = 0;
+  private lockScreenActive = false;
   private lockScreenTitle = '';
+  private dir = new Directory(Paths.cache, 'speech');
 
-  private ensurePlaylist() {
-    if (this.playlist) return this.playlist;
-    const playlist = createAudioPlaylist({ sources: [], loop: 'none', updateInterval: 200 });
-    playlist.playbackRate = this.voice.rate;
-    playlist.addListener('trackChanged', ({ currentIndex }) => this.onTrack(currentIndex));
-    playlist.addListener('playlistStatusUpdate', (s) => this.onStatus(s));
-    this.playlist = playlist;
-    return playlist;
+  private ensurePlayer() {
+    if (this.player) return this.player;
+    const player = createAudioPlayer(null, { updateInterval: 200, keepAudioSessionActive: true });
+    player.addListener('playbackStatusUpdate', (s) => this.onStatus(s));
+    this.player = player;
+    return player;
   }
 
   protected halt() {
@@ -40,44 +42,39 @@ export class AudioNarrator extends BaseNarrator {
     this.starved = false;
     this.atEnd = false;
     void SpeechFile?.cancelPending();
-    if (this.playlist) {
-      this.playlist.pause();
-      this.playlist.clear();
-    }
-    const old = this.items;
-    this.items = [];
+    this.player?.pause();
+    const old = [...this.queue, ...(this.current ? [this.current] : [])];
+    this.queue = [];
+    this.current = null;
     old.forEach((i) => safeDelete(i.file));
   }
 
   pause = () => {
-    this.playlist?.pause();
+    this.player?.pause();
     this.set({ playing: false, buffering: false });
   };
 
   play = () => {
-    const item = this.currentItem();
     const { position } = this.state;
-    if (this.playlist && item && samePos(item.pos, position)) {
+    if (this.player && this.current && samePos(this.current.pos, position)) {
       this.set({ playing: true });
-      this.playlist.play();
+      this.player.play();
       return;
     }
     void this.startFrom(position);
   };
 
   protected applyRate(rate: number) {
-    if (this.playlist) this.playlist.playbackRate = rate;
+    this.player?.setPlaybackRate(rate, 'high');
   }
 
   dispose() {
     this.halt();
-    this.playlist?.clearLockScreenControls();
-    this.playlist?.destroy();
-    this.playlist = null;
-  }
-
-  private currentItem(): Item | undefined {
-    return this.playlist ? this.items[this.playlist.currentIndex] : undefined;
+    if (this.player) {
+      this.player.clearLockScreenControls();
+      this.player.remove();
+      this.player = null;
+    }
   }
 
   protected async startFrom(from: Position) {
@@ -94,7 +91,8 @@ export class AudioNarrator extends BaseNarrator {
     this.commit(pos);
     this.set({ playing: true, buffering: true });
     this.cursor = pos;
-    this.ensurePlaylist();
+    this.starved = true;
+    this.ensurePlayer();
     void this.fill(session);
   }
 
@@ -102,9 +100,7 @@ export class AudioNarrator extends BaseNarrator {
     if (this.filling) return;
     this.filling = true;
     try {
-      while (session === this.session && this.cursor) {
-        const playing = this.playlist?.currentIndex ?? 0;
-        if (this.items.length - playing > AHEAD) break;
+      while (session === this.session && this.cursor && this.queue.length < AHEAD) {
         const pos = await this.normalise(this.cursor);
         if (session !== this.session) return;
         if (!pos) {
@@ -134,57 +130,58 @@ export class AudioNarrator extends BaseNarrator {
           safeDelete(file);
           continue;
         }
-        this.append({ pos, file, sectionTitle: section.title });
+        this.queue.push({ pos, file, sectionTitle: section.title });
+        if (this.starved) this.advance();
       }
     } finally {
       this.filling = false;
     }
-    if (session === this.session && this.atEnd && this.starved) this.finish();
+    if (session === this.session && this.atEnd && this.starved && !this.queue.length) this.finish();
   }
 
-  private append(item: Item) {
-    const playlist = this.playlist!;
-    this.items.push(item);
-    playlist.add({ uri: item.file.uri });
-    const index = this.items.length - 1;
-    if (index === 0) {
-      this.activateLockScreen(item);
-      if (this.state.playing) playlist.play();
-      this.set({ buffering: false });
-    } else if (this.starved) {
-      this.starved = false;
-      playlist.skipTo(index);
-      if (this.state.playing) playlist.play();
-      this.set({ buffering: false });
+  private advance() {
+    const next = this.queue.shift();
+    if (this.current) safeDelete(this.current.file);
+    this.current = next ?? null;
+    if (!next) {
+      if (this.atEnd) {
+        this.finish();
+      } else {
+        this.starved = true;
+        this.set({ buffering: true });
+      }
+      return;
     }
-  }
-
-  private onTrack(index: number) {
-    const item = this.items[index];
-    if (!item) return;
+    this.starved = false;
+    const player = this.ensurePlayer();
+    this.switchedAt = Date.now();
+    player.replace({ uri: next.file.uri });
+    player.setPlaybackRate(this.voice.rate, 'high');
     if (this.sleepDue()) {
       this.set({ sleepAt: null });
       this.pause();
+    } else if (this.state.playing) {
+      player.play();
     }
-    if (item.pos.sectionIdx !== this.state.position.sectionIdx) void this.show(item.pos.sectionIdx);
-    this.commit(item.pos);
-    this.updateLockScreen(item);
-    for (let i = 0; i < index - KEEP_BEHIND; i++) safeDelete(this.items[i].file);
+    if (next.pos.sectionIdx !== this.state.position.sectionIdx) void this.show(next.pos.sectionIdx);
+    this.commit(next.pos);
+    this.set({ buffering: false });
+    this.updateLockScreen(next);
     void this.fill(this.session);
   }
 
-  private onStatus(s: AudioPlaylistStatus) {
-    const progress = s.duration > 0 ? Math.min(1, s.currentTime / s.duration) : 0;
+  private onStatus(s: AudioStatus) {
+    if (!this.current) return;
+    if (s.didJustFinish) {
+      // A late "finished" from the previous file must not skip the sentence that just started.
+      if (Date.now() - this.switchedAt > 250) this.advance();
+      return;
+    }
     const patch: Partial<typeof this.state> = {};
+    const progress = s.duration > 0 ? Math.min(1, s.currentTime / s.duration) : 0;
     if (Math.abs(progress - this.state.sentenceProgress) > 0.02) patch.sentenceProgress = progress;
-    if (s.didJustFinish && s.currentIndex >= this.items.length - 1) {
-      if (this.atEnd && !this.filling) {
-        this.finish();
-        return;
-      }
-      this.starved = true;
-      patch.buffering = true;
-    } else if (!this.starved && !this.state.buffering && s.isLoaded && s.playing !== this.state.playing) {
+    const settled = Date.now() - this.switchedAt > SWITCH_GRACE_MS;
+    if (settled && !this.starved && s.isLoaded && s.playing !== this.state.playing) {
       // Lock screen, headset or Control Center toggled playback.
       patch.playing = s.playing;
     }
@@ -193,23 +190,22 @@ export class AudioNarrator extends BaseNarrator {
 
   private finish() {
     this.starved = false;
-    this.playlist?.pause();
+    this.player?.pause();
     this.set({ playing: false, buffering: false, sentenceProgress: 0 });
   }
 
-  private activateLockScreen(item: Item) {
-    this.lockScreenTitle = item.sectionTitle;
-    this.playlist?.setActiveForLockScreen(
-      true,
-      { title: item.sectionTitle, artist: this.book.author ?? undefined, albumTitle: this.book.title },
-      { showNextTrack: true, showPreviousTrack: true },
-    );
-  }
-
   private updateLockScreen(item: Item) {
-    if (item.sectionTitle === this.lockScreenTitle) return;
-    this.lockScreenTitle = item.sectionTitle;
-    this.playlist?.updateLockScreenMetadata({ title: item.sectionTitle, artist: this.book.author ?? undefined, albumTitle: this.book.title });
+    const player = this.player;
+    if (!player) return;
+    const metadata = { title: item.sectionTitle, artist: this.book.author ?? undefined, albumTitle: this.book.title };
+    if (!this.lockScreenActive) {
+      player.setActiveForLockScreen(true, metadata, { showNextTrack: false, showPreviousTrack: false });
+      this.lockScreenActive = true;
+      this.lockScreenTitle = item.sectionTitle;
+    } else if (item.sectionTitle !== this.lockScreenTitle) {
+      player.updateLockScreenMetadata(metadata);
+      this.lockScreenTitle = item.sectionTitle;
+    }
   }
 }
 

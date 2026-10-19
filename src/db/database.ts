@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-export type BookFormat = 'pdf' | 'epub' | 'txt' | 'html' | 'fb2';
+export type BookFormat = 'pdf' | 'epub' | 'txt' | 'html' | 'fb2' | 'images';
 export type BookStatus = 'processing' | 'ready' | 'error';
 
 export type Book = {

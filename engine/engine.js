@@ -137,14 +137,17 @@
           return l.text;
         });
       var text = linesToParagraphs(kept);
-      post({
-        type: 'section',
-        jobId: job.id,
-        index: pageNo - 1,
-        title: 'Sayfa ' + pageNo,
-        text: text,
-        needsOcr: text.replace(/\s/g, '').length < 20,
-      });
+      var needsOcr = text.replace(/\s/g, '').length < 20;
+      post({ type: 'section', jobId: job.id, index: pageNo - 1, title: 'Sayfa ' + pageNo, text: text, needsOcr: needsOcr });
+      if (needsOcr) {
+        job.ocr.push({
+          index: pageNo - 1,
+          title: 'Sayfa ' + pageNo,
+          render: function () {
+            return renderPdfPage(doc, pageNo);
+          },
+        });
+      }
     };
     for (var p = 1; p <= doc.numPages; p++) {
       if (job.cancelled) return;
@@ -200,7 +203,27 @@
         emit(p, lines);
       }
     }
+    held.forEach(function (h) {
+      emit(h.p, h.lines);
+    });
+    await runOcr(job);
     await task.destroy();
+  }
+
+  async function renderPdfPage(doc, pageNo) {
+    var page = await doc.getPage(pageNo);
+    var base = page.getViewport({ scale: 1 });
+    var scale = Math.min(3, OCR_MAX_SIDE / Math.max(base.width, base.height, 1));
+    var viewport = page.getViewport({ scale: scale });
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    page.cleanup();
+    return canvas;
   }
 
   // ---------- HTML / XHTML helpers ----------
@@ -214,6 +237,7 @@
   function nodeText(root) {
     var out = [];
     var images = 0;
+    var sources = [];
     (function walk(n) {
       for (var c = n.firstChild; c; c = c.nextSibling) {
         if (c.nodeType === 3) {
@@ -223,6 +247,9 @@
           if (SKIP[tag]) continue;
           if (tag === 'IMG' || tag === 'IMAGE') {
             images++;
+            var src = c.getAttribute('src') || c.getAttribute('href') || c.getAttribute('xlink:href');
+            if (!src && c.getAttributeNS) src = c.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+            if (src) sources.push(src);
             continue;
           }
           var block = BLOCK[tag];
@@ -238,7 +265,7 @@
       .map(cleanSpaces)
       .filter(Boolean)
       .join('\n');
-    return { text: text, images: images };
+    return { text: text, images: images, sources: sources };
   }
 
   function parseMarkup(str, preferXml) {
@@ -351,15 +378,29 @@
         res = nodeText(d.body || d.documentElement);
       }
       if (titles[item.href]) lastTitle = titles[item.href];
-      post({
-        type: 'section',
-        jobId: job.id,
-        index: i,
-        title: titles[item.href] || lastTitle || 'Bölüm ' + (i + 1),
-        text: res.text,
-        needsOcr: res.images > 0 && res.text.replace(/\s/g, '').length < 20,
-      });
+      var sectionTitle = titles[item.href] || lastTitle || 'Bölüm ' + (i + 1);
+      var needsOcr = res.images > 0 && res.text.replace(/\s/g, '').length < 20;
+      post({ type: 'section', jobId: job.id, index: i, title: sectionTitle, text: res.text, needsOcr: needsOcr });
+      if (needsOcr) {
+        var files = (res.sources || [])
+          .map(function (src) {
+            return zip.file(resolvePath(item.href, src.split('#')[0]));
+          })
+          .filter(Boolean);
+        if (files.length) {
+          job.ocr.push({
+            index: i,
+            title: sectionTitle,
+            images: files.map(function (zf) {
+              return function () {
+                return zf.async('uint8array');
+              };
+            }),
+          });
+        }
+      }
     }
+    await runOcr(job);
   }
 
   // ---------- Text decoding ----------
@@ -467,25 +508,185 @@
     });
   }
 
-  var EXTRACTORS = { pdf: extractPdf, epub: extractEpub, txt: extractTxt, html: extractHtml, fb2: extractFb2 };
+  // ---------- OCR ----------
+  var OCR_MAX_SIDE = 2000;
+  var ocr = { assets: {}, worker: null, starting: null };
+
+  function blobUrl(data) {
+    return URL.createObjectURL(new Blob([data], { type: 'application/javascript' }));
+  }
+
+  // Everything is served from blob URLs: the boot script maps the fake language URLs onto them, so nothing is downloaded.
+  function getOcrWorker() {
+    if (ocr.worker) return Promise.resolve(ocr.worker);
+    if (ocr.starting) return ocr.starting;
+    ocr.starting = (async function () {
+      var a = ocr.assets;
+      if (!a.core || !a.worker || !a.tur || !a.eng) throw new Error('OCR verileri yüklenmedi.');
+      var map = {
+        'https://ocr.local/tur.traineddata.gz': URL.createObjectURL(new Blob([a.tur])),
+        'https://ocr.local/eng.traineddata.gz': URL.createObjectURL(new Blob([a.eng])),
+      };
+      var boot =
+        'var __map=' + JSON.stringify(map) + ';var __fetch=self.fetch.bind(self);' +
+        'self.fetch=function(u,o){return __fetch(__map[u]||u,o);};' +
+        'importScripts(' + JSON.stringify(blobUrl(a.core)) + ');importScripts(' + JSON.stringify(blobUrl(a.worker)) + ');';
+      var worker = await Tesseract.createWorker(['tur', 'eng'], 1, {
+        workerPath: blobUrl(boot),
+        workerBlobURL: false,
+        langPath: 'https://ocr.local',
+        gzip: true,
+        cacheMethod: 'none',
+      });
+      ocr.worker = worker;
+      return worker;
+    })();
+    ocr.starting.catch(function () {
+      ocr.starting = null;
+    });
+    return ocr.starting;
+  }
+
+  function ocrText(raw) {
+    return raw
+      .replace(/\r/g, '')
+      .split(/\n[ \t]*\n/)
+      .map(function (block) {
+        return linesToParagraphs(block.split('\n')).replace(/\n/g, ' ');
+      })
+      .filter(function (p) {
+        return p.replace(/[^\p{L}\p{N}]/gu, '').length > 1;
+      })
+      // OCR often breaks a paragraph where a line happens to be short; rejoin mid-sentence splits.
+      .reduce(function (acc, p) {
+        var prev = acc[acc.length - 1];
+        if (prev && !/[.!?…:;"”»)]$/.test(prev) && /^[a-zçğıöşüâîû]/.test(p)) acc[acc.length - 1] = prev + ' ' + p;
+        else acc.push(p);
+        return acc;
+      }, [])
+      .join('\n');
+  }
+
+  async function imageToCanvas(bytes) {
+    var bitmap = await createImageBitmap(new Blob([bytes]), { imageOrientation: 'from-image' });
+    var scale = Math.min(1, OCR_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    if (bitmap.close) bitmap.close();
+    return canvas;
+  }
+
+  async function recognize(worker, canvas) {
+    try {
+      var res = await worker.recognize(canvas);
+      return ocrText(res.data.text || '');
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+
+  // Asks the app first (it may still have to deliver the OCR data); the app answers with engine.ocrStart(jobId, ok).
+  async function runOcr(job) {
+    if (!job.ocr.length || job.cancelled) return;
+    post({ type: 'ocrNeeded', jobId: job.id, count: job.ocr.length });
+    var ok = await new Promise(function (resolve) {
+      job.ocrGate = resolve;
+    });
+    if (!ok) return;
+    var worker = await getOcrWorker();
+    for (var i = 0; i < job.ocr.length; i++) {
+      if (job.cancelled) return;
+      var item = job.ocr[i];
+      var texts = [];
+      try {
+        if (item.render) {
+          texts.push(await recognize(worker, await item.render()));
+        } else {
+          for (var k = 0; k < item.images.length; k++) {
+            texts.push(await recognize(worker, await imageToCanvas(await item.images[k]())));
+          }
+        }
+      } catch (e) {
+        texts = [];
+      }
+      var text = texts.filter(Boolean).join('\n');
+      post({ type: 'section', jobId: job.id, index: item.index, title: item.title, text: text, needsOcr: !text, ocr: true });
+      post({ type: 'ocrProgress', jobId: job.id, done: i + 1, total: job.ocr.length });
+    }
+  }
+
+  async function extractImages(job, bytes) {
+    var bounds = job.marks.concat([bytes.length]);
+    var images = [];
+    for (var i = 0; i < bounds.length - 1; i++) {
+      if (bounds[i + 1] > bounds[i]) images.push(bytes.subarray(bounds[i], bounds[i + 1]));
+    }
+    post({ type: 'meta', jobId: job.id, title: null, author: null, language: null, sectionCount: images.length });
+    images.forEach(function (img, n) {
+      post({ type: 'section', jobId: job.id, index: n, title: 'Sayfa ' + (n + 1), text: '', needsOcr: true });
+      job.ocr.push({
+        index: n,
+        title: 'Sayfa ' + (n + 1),
+        images: [
+          function () {
+            return Promise.resolve(img);
+          },
+        ],
+      });
+    });
+    await runOcr(job);
+  }
+
+  var EXTRACTORS = { pdf: extractPdf, epub: extractEpub, txt: extractTxt, html: extractHtml, fb2: extractFb2, images: extractImages };
 
   window.engine = {
     begin: function (jobId, kind) {
-      jobs[jobId] = { id: jobId, kind: kind, parts: [], cancelled: false };
+      jobs[jobId] = { id: jobId, kind: kind, parts: [], marks: [], size: 0, ocr: [], ocrGate: null, cancelled: false };
+    },
+    // Separates the files of a multi-file job (photo books) inside the byte stream.
+    mark: function (jobId) {
+      var job = jobs[jobId];
+      if (job) job.marks.push(job.size);
+    },
+    ocrStart: function (jobId, ok) {
+      var job = jobs[jobId];
+      if (job && job.ocrGate) job.ocrGate(!!ok);
+    },
+    hasOcr: function () {
+      post({ type: 'ocrAssets', ready: !!(ocr.assets.core && ocr.assets.worker && ocr.assets.tur && ocr.assets.eng) });
     },
     chunk: function (jobId, b64) {
       var job = jobs[jobId];
-      if (job) job.parts.push(b64ToBytes(b64));
+      if (job) {
+        var part = b64ToBytes(b64);
+        job.parts.push(part);
+        job.size += part.length;
+      }
       post({ type: 'ack', jobId: jobId });
     },
     cancel: function (jobId) {
-      if (jobs[jobId]) jobs[jobId].cancelled = true;
+      var job = jobs[jobId];
+      if (!job) return;
+      job.cancelled = true;
+      if (job.ocrGate) job.ocrGate(false);
     },
     end: async function (jobId) {
       var job = jobs[jobId];
       if (!job) return;
       var bytes = concat(job.parts);
       job.parts = null;
+      if (job.kind.indexOf('asset:') === 0) {
+        ocr.assets[job.kind.slice(6)] = bytes;
+        delete jobs[jobId];
+        post({ type: 'done', jobId: jobId });
+        return;
+      }
       try {
         var fn = EXTRACTORS[job.kind];
         if (!fn) throw new Error('Desteklenmeyen format: ' + job.kind);

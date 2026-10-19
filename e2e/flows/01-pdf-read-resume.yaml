@@ -11,9 +11,7 @@ name: PDF ekle, sesli oku, duraklat, atla, ara ve kaldığı yerden devam et
 - tapOn:
     id: "url-input"
 - inputText: "${SERVER}/mavi-defter.pdf"
-- hideKeyboard
-- tapOn:
-    id: "url-submit"
+- pressKey: Enter
 - extendedWaitUntil:
     visible:
       text: "%0 · 3 sayfa.*"

@@ -23,20 +23,37 @@ export function languageLabel(code: string) {
   return LANGUAGES.find((l) => l.code === code)?.label ?? code.toUpperCase();
 }
 
-const QUALITY_RANK = { premium: 0, enhanced: 1, default: 2 } as const;
 export const QUALITY_LABEL = { premium: 'Premium', enhanced: 'Gelişmiş', default: 'Standart' } as const;
+
+const REGIONS: Record<string, string> = {
+  TR: 'Türkiye', US: 'ABD', GB: 'Birleşik Krallık', AU: 'Avustralya', IN: 'Hindistan', NG: 'Nijerya', CA: 'Kanada',
+  IE: 'İrlanda', ZA: 'Güney Afrika', NZ: 'Yeni Zelanda', SG: 'Singapur', DE: 'Almanya', AT: 'Avusturya', CH: 'İsviçre',
+  FR: 'Fransa', BE: 'Belçika', ES: 'İspanya', MX: 'Meksika', AR: 'Arjantin', CO: 'Kolombiya', IT: 'İtalya', PT: 'Portekiz',
+  BR: 'Brezilya', NL: 'Hollanda', RU: 'Rusya', SA: 'Suudi Arabistan', EG: 'Mısır', AE: 'BAE', AZ: 'Azerbaycan', IR: 'İran',
+};
 
 function region(tag: string) {
   const parts = tag.replace('_', '-').split('-');
-  return parts[1]?.toUpperCase() ?? '';
+  const r = parts.find((p, i) => i > 0 && /^[A-Za-z]{2}$/.test(p));
+  return r ? r.toUpperCase() : '';
 }
 
-// Google voice ids look like "tr-tr-x-cfs-local"; give them a readable, stable name.
-function androidLabel(v: NativeVoice, index: number) {
-  const m = v.id.match(/-x-([a-z]{3})-/);
-  const variant = m ? m[1].toUpperCase() : String(index + 1);
-  return `Ses ${variant}`;
+// Google voice ids look like "tr-tr-x-cfs-local"; turn them into "Türkiye · CFS". Apple voices already have names.
+function voiceLabel(v: NativeVoice) {
+  if (Platform.OS !== 'android') return v.name;
+  const r = region(v.language);
+  const place = REGIONS[r] ?? r;
+  const variant = v.id.match(/-x-([a-z]{3})-/)?.[1]?.toUpperCase();
+  if (variant) return place ? `${place} · ${variant}` : variant;
+  return place ? `${place} · Varsayılan` : 'Varsayılan';
 }
+
+function availability(v: NativeVoice) {
+  if (!v.installed) return 2;
+  return v.network ? 1 : 0;
+}
+
+const QUALITY_RANK = { premium: 0, enhanced: 1, default: 2 } as const;
 
 export async function loadVoices(): Promise<VoiceEntry[]> {
   let raw: NativeVoice[];
@@ -54,23 +71,22 @@ export async function loadVoices(): Promise<VoiceEntry[]> {
       installed: true,
     }));
   }
-  const counters = new Map<string, number>();
   return raw
     .map((v) => {
-      const lang = v.language.toLowerCase().replace('_', '-');
-      const n = counters.get(lang) ?? 0;
-      counters.set(lang, n + 1);
-      const label = Platform.OS === 'android' ? androidLabel(v, n) : v.name;
       const bits: string[] = [QUALITY_LABEL[v.quality]];
       if (v.gender === 'female') bits.push('Kadın');
       if (v.gender === 'male') bits.push('Erkek');
-      const r = region(v.language);
-      if (r) bits.push(r);
-      if (v.network) bits.push('İnternet gerekir');
-      if (!v.installed) bits.push('İndirilmemiş');
-      return { ...v, language: lang, label, detail: bits.join(' · ') };
+      if (Platform.OS !== 'android' && region(v.language)) bits.push(REGIONS[region(v.language)] ?? region(v.language));
+      bits.push(!v.installed ? 'İndirilmesi gerekir' : v.network ? 'İnternetle çalışır' : 'İnternetsiz çalışır');
+      return { ...v, language: v.language.toLowerCase().replace('_', '-'), label: voiceLabel(v), detail: bits.join(' · ') };
     })
-    .sort((a, b) => QUALITY_RANK[a.quality] - QUALITY_RANK[b.quality] || Number(a.network) - Number(b.network) || a.label.localeCompare(b.label));
+    .sort(
+      (a, b) =>
+        availability(a) - availability(b) ||
+        Number(region(b.language) === b.language.split('-')[0].toUpperCase()) - Number(region(a.language) === a.language.split('-')[0].toUpperCase()) ||
+        QUALITY_RANK[a.quality] - QUALITY_RANK[b.quality] ||
+        a.label.localeCompare(b.label, 'tr'),
+    );
 }
 
 export function voicesFor(all: VoiceEntry[], language: string) {

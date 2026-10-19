@@ -122,7 +122,30 @@ export async function importText(db: SQLiteDatabase, title: string, text: string
   }
 }
 
+// Page photos become one book: a folder of numbered images that the engine reads with OCR.
+export async function importPhotos(db: SQLiteDatabase, uris: string[], title: string): Promise<string> {
+  if (!uris.length) throw new Error('Fotoğraf seçilmedi.');
+  const id = newId();
+  const dir = new Directory(booksDir(), id);
+  dir.create({ intermediates: true, idempotent: true });
+  let size = 0;
+  for (let i = 0; i < uris.length; i++) {
+    const source = new File(uris[i]);
+    const ext = extensionOf(source.name) || 'jpg';
+    const dest = new File(dir, `${String(i + 1).padStart(4, '0')}.${ext}`);
+    await source.copy(dest);
+    size += dest.size ?? 0;
+  }
+  await insertBook(db, { id, title: title.trim() || 'Fotoğraflanan sayfalar', format: 'images', fileUri: dir.uri, size });
+  return id;
+}
+
 export function deleteBookFile(fileUri: string) {
+  const dir = new Directory(fileUri);
+  if (dir.exists) {
+    dir.delete();
+    return;
+  }
   const f = new File(fileUri);
   if (f.exists) f.delete();
 }

@@ -10,9 +10,7 @@ name: EPUB ekle, ses seç, bölümler arası kesintisiz okuma
 - tapOn:
     id: "url-input"
 - inputText: "${SERVER}/lighthouse.epub"
-- hideKeyboard
-- tapOn:
-    id: "url-submit"
+- pressKey: Enter
 - extendedWaitUntil:
     visible:
       text: "%0 · 2 bölüm.*"

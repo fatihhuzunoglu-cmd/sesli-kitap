@@ -32,7 +32,15 @@
       "expo-router",
       "expo-status-bar",
       "expo-sqlite",
-      "expo-audio"
+      "expo-audio",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Kitap sayfalarının fotoğraflarını seçip sesli okuyabilmek için fotoğraflarınıza erişim gerekir.",
+          "cameraPermission": "Kitap sayfalarını fotoğraflayıp sesli okuyabilmek için kameraya erişim gerekir.",
+          "microphonePermission": false
+        }
+      ]
     ],
     "scheme": "seslikitap",
     "experiments": {

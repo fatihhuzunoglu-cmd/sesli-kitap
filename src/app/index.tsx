@@ -5,8 +5,9 @@ import { useSQLiteContext } from 'expo-sqlite';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { deleteBook, listBooks, type Book } from '@/db/database';
 import { useExtractor } from '@/engine/ExtractorProvider';
-import { useBooksChanged } from '@/engine/booksEvents';
-import { deleteBookFile, importFromUrl, importText, NOT_YET_SUPPORTED, pickAndImportBooks, SUPPORTED_LABEL } from '@/lib/importBooks';
+import { getOcrProgress, useBooksChanged } from '@/engine/booksEvents';
+import * as ImagePicker from 'expo-image-picker';
+import { deleteBookFile, importFromUrl, importPhotos, importText, NOT_YET_SUPPORTED, pickAndImportBooks, SUPPORTED_LABEL } from '@/lib/importBooks';
 import { Sheet } from '@/ui/Sheet';
 import { useTheme, type Theme } from '@/ui/theme';
 
@@ -65,6 +66,43 @@ export default function Library() {
       }
       return imported;
     });
+
+  const photoTitle = () => `Fotoğraflanan sayfalar ${new Date().toLocaleDateString('tr-TR')}`;
+
+  const addFromGallery = () => {
+    setMode(null);
+    setTimeout(async () => {
+      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, orderedSelection: true, quality: 0.9 });
+      if (res.canceled || !res.assets.length) return;
+      void run(async () => [await importPhotos(db, res.assets.map((a) => a.uri), photoTitle())]);
+    }, 450);
+  };
+
+  // Each shot is one page; the user keeps shooting until they tap "Bitti".
+  const addFromCamera = () => {
+    setMode(null);
+    setTimeout(async () => {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Kamera izni gerekli', 'Sayfaları fotoğraflamak için Ayarlar’dan kamera izni verin.');
+        return;
+      }
+      const shots: string[] = [];
+      for (;;) {
+        const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.9 });
+        if (res.canceled) break;
+        shots.push(res.assets[0].uri);
+        const more = await new Promise<boolean>((resolve) =>
+          Alert.alert(`${shots.length}. sayfa eklendi`, 'Bir sayfa daha fotoğraflamak ister misiniz?', [
+            { text: 'Bitti', onPress: () => resolve(false) },
+            { text: 'Sonraki sayfa', onPress: () => resolve(true) },
+          ]),
+        );
+        if (!more) break;
+      }
+      if (shots.length) void run(async () => [await importPhotos(db, shots, photoTitle())]);
+    }, 450);
+  };
 
   const addFromUrl = () =>
     run(async () => {
@@ -168,6 +206,8 @@ export default function Library() {
       <Sheet visible={mode === 'menu'} title="Kitap ekle" onClose={() => setMode(null)}>
         <View style={{ paddingHorizontal: 16, gap: 8 }}>
           <MenuItem theme={t} icon="document-text-outline" title="Dosyadan" body={SUPPORTED_LABEL} onPress={addFromFiles} testID="add-file" />
+          <MenuItem theme={t} icon="camera-outline" title="Sayfa fotoğrafı çek" body="Basılı kitabın sayfalarını çekin, metin otomatik tanınır" onPress={addFromCamera} testID="add-camera" />
+          <MenuItem theme={t} icon="images-outline" title="Galeriden fotoğraf seç" body="Daha önce çektiğiniz sayfa fotoğraflarını okuyun" onPress={addFromGallery} testID="add-gallery" />
           <MenuItem theme={t} icon="link-outline" title="Bağlantıdan" body="İnternetteki bir kitap dosyasını indirin" onPress={() => setMode('url')} testID="add-url" />
           <MenuItem theme={t} icon="clipboard-outline" title="Metin yapıştır" body="Bir yazıyı, makaleyi ya da notu dinleyin" onPress={() => setMode('text')} testID="add-text" />
         </View>
@@ -235,17 +275,22 @@ function MenuItem({ theme, icon, title, body, onPress, testID }: { theme: Theme;
 function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Theme; onPress: () => void; onLongPress: () => void }) {
   const s = styles(theme);
   const processing = book.status === 'processing';
-  const unit = book.format === 'pdf' ? 'sayfa' : 'bölüm';
+  const unit = book.format === 'pdf' || book.format === 'images' ? 'sayfa' : 'bölüm';
+  const ocr = getOcrProgress(book.id);
   let status: string;
   if (processing) {
-    status = book.sectionCount ? `Hazırlanıyor… ${book.processedCount}/${book.sectionCount} ${unit}` : 'Hazırlanıyor…';
+    status = ocr
+      ? `Metin tanınıyor… ${ocr.done}/${ocr.total} ${unit}`
+      : book.sectionCount
+        ? `Hazırlanıyor… ${book.processedCount}/${book.sectionCount} ${unit}`
+        : 'Hazırlanıyor…';
   } else if (book.status === 'error') {
     status = 'Hata — dokunun';
   } else {
     status = `%${Math.round(book.progress * 100)} · ${book.sectionCount} ${unit}`;
     if (book.ocrPendingCount > 0) status += ` · ${book.ocrPendingCount} ${unit} metinsiz`;
   }
-  const bar = processing && book.sectionCount ? book.processedCount / book.sectionCount : book.progress;
+  const bar = ocr ? ocr.done / Math.max(1, ocr.total) : processing && book.sectionCount ? book.processedCount / book.sectionCount : book.progress;
   return (
     <Pressable
       style={({ pressed }) => [s.card, pressed && { opacity: 0.7 }]}
@@ -256,7 +301,7 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
       testID="book-card"
     >
       <View style={s.cardTop}>
-        <Text style={s.badge}>{book.format.toUpperCase()}</Text>
+        <Text style={s.badge}>{book.format === 'images' ? 'FOTOĞRAF' : book.format.toUpperCase()}</Text>
         {processing && book.processedCount > 0 && <Text style={s.readable}>Okunabilir</Text>}
       </View>
       <Text style={s.title} numberOfLines={2}>

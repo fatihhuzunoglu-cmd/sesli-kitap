@@ -126,7 +126,7 @@ function Reader({ book }: { book: Book }) {
     setBookmarkId((await findBookmark(db, book.id, position))?.id ?? null);
   };
 
-  const unit = book.format === 'pdf' ? 'Sayfa' : 'Bölüm';
+  const unit = book.format === 'pdf' || book.format === 'images' ? 'Sayfa' : 'Bölüm';
   const lastSection = book.sectionCount - 1;
   const canNext = position.sectionIdx < Math.min(lastSection, book.processedCount - 1);
   const sentenceCount = section?.sentences.length ?? 0;
@@ -168,8 +168,10 @@ function Reader({ book }: { book: Book }) {
             <Text style={s.notice} testID="empty-section">
               {section === null
                 ? 'Bu bölüm hâlâ hazırlanıyor…'
-                : section.needsOcr
-                  ? 'Bu sayfada seçilebilir metin yok (taranmış sayfa veya resim). Sesli okuma bu sayfayı atlar.'
+                : section.needsOcr && book.status === 'processing'
+                  ? 'Bu sayfanın metni resimden tanınıyor (OCR)… Birazdan okunabilir olacak.'
+                  : section.needsOcr
+                    ? 'Bu sayfada okunabilir metin bulunamadı. Sesli okuma bu sayfayı atlar.'
                   : 'Bu bölüm boş.'}
             </Text>
           }
