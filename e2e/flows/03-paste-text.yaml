@@ -25,6 +25,7 @@ name: Metin yapıştır ve dinle
     id: "play-button"
 - extendedWaitUntil:
     visible:
-      text: ".*Cümle 2/3.*"
+      text: ".*Cümle 3/3.*"
     timeout: 90000
+# The three short sentences are read in a few seconds; reaching the last one proves playback ran through.
 - takeScreenshot: ${OUT}/12-pasted-text

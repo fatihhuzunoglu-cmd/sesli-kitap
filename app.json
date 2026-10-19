@@ -53,7 +53,8 @@
             "backgroundColor": "#141210"
           }
         }
-      ]
+      ],
+      "./plugins/withoutEmojiCompat"
     ],
     "scheme": "seslikitap",
     "experiments": {
