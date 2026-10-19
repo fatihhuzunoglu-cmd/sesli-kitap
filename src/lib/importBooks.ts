@@ -111,7 +111,7 @@ export async function importFromUrl(db: SQLiteDatabase, rawUrl: string): Promise
     try {
       file = await File.downloadFileAsync(url, tmp);
     } catch (e) {
-      const status = String((e as Error).message ?? '').match(/([45]\d\d)/)?.[1];
+      const status = String((e as Error).message ?? '').match(/\b([45]\d\d)\b/)?.[1];
       throw new Error(
         status === '404'
           ? 'Bu bağlantıda dosya bulunamadı (404). Bağlantıyı kontrol edin.'
