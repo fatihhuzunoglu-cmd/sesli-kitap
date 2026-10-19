@@ -163,7 +163,7 @@ export default function Library() {
       <Stack.Screen
         options={{
           headerLeft: () => (
-            <Pressable onPress={() => router.push('/settings')} hitSlop={12} accessibilityLabel="Ayarlar" testID="settings-button">
+            <Pressable onPress={() => router.push('/settings')} hitSlop={12} accessibilityLabel="Ayarlar" testID="settings-button" style={{ marginRight: 16 }}>
               <Ionicons name="settings-outline" size={24} color={t.text} />
             </Pressable>
           ),

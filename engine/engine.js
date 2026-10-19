@@ -2,6 +2,39 @@
 (function () {
   'use strict';
 
+  // pdf.js reads text with `for await` over a ReadableStream; Safari (iOS) and Chromium before 124 cannot iterate streams.
+  if (typeof ReadableStream !== 'undefined' && !ReadableStream.prototype[Symbol.asyncIterator]) {
+    ReadableStream.prototype.values = function (options) {
+      var preventCancel = !!(options && options.preventCancel);
+      var reader = this.getReader();
+      return {
+        next: function () {
+          return reader.read().then(
+            function (r) {
+              if (r.done) reader.releaseLock();
+              return r;
+            },
+            function (e) {
+              reader.releaseLock();
+              throw e;
+            },
+          );
+        },
+        return: function (value) {
+          var done = preventCancel ? Promise.resolve() : reader.cancel(value);
+          return done.then(function () {
+            reader.releaseLock();
+            return { done: true, value: value };
+          });
+        },
+        [Symbol.asyncIterator]: function () {
+          return this;
+        },
+      };
+    };
+    ReadableStream.prototype[Symbol.asyncIterator] = ReadableStream.prototype.values;
+  }
+
   var post = function (msg) {
     window.ReactNativeWebView.postMessage(JSON.stringify(msg));
   };

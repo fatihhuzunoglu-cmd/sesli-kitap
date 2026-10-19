@@ -15,7 +15,7 @@ name: Word (DOCX) ve Kindle (AZW3) kitapları
     visible:
       text: "%0 · 2 bölüm.*"
     timeout: 90000
-- assertVisible: "Kütüphane Notları"
+- assertVisible: ".*Kütüphane Notları.*"
 - tapOn:
     id: "add-button"
 - tapOn:
@@ -25,14 +25,14 @@ name: Word (DOCX) ve Kindle (AZW3) kitapları
 - inputText: "${SERVER}/alice-gutenberg.azw3"
 - pressKey: Enter
 - extendedWaitUntil:
-    visible: "Alice's Adventures in Wonderland"
+    visible: ".*Alice's Adventures in Wonderland.*"
     timeout: 90000
 - extendedWaitUntil:
     visible:
       text: "%0 · 19 bölüm.*"
     timeout: 90000
 - takeScreenshot: ${OUT}/16-docx-kindle-library
-- tapOn: "Alice's Adventures in Wonderland"
+- tapOn: ".*Alice's Adventures in Wonderland.*"
 - tapOn:
     id: "toc-button"
 - tapOn: "CHAPTER I. Down the Rabbit-Hole"

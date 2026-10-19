@@ -11,6 +11,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:engine
+      - run: npx tsc --noEmit
+      - run: npx eslint src modules
+      - run: npm test
+      - name: Install browser engines
+        run: npx playwright-core install --with-deps chromium webkit
+      - name: Extractor engine in Chromium and WebKit
+        run: npm run test:engine
+
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 75

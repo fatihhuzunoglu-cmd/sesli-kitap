@@ -12,7 +12,7 @@ name: Metin yapıştır ve dinle
 - inputText: "Not"
 - tapOn:
     id: "paste-text"
-- inputText: "Bu bir deneme metnidir. Uygulama bu metni sesli okuyacak. Her cumle sirayla okunur."
+- inputText: "Bir deneme. Sesli okunur. Son cumle."
 - tapOn:
     id: "paste-submit"
 - extendedWaitUntil:

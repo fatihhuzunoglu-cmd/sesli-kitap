@@ -15,7 +15,7 @@ name: EPUB ekle, ses seç, bölümler arası kesintisiz okuma
     visible:
       text: "%0 · 2 bölüm.*"
     timeout: 90000
-- assertVisible: "The Lighthouse Keeper"
+- assertVisible: ".*The Lighthouse Keeper.*"
 - tapOn:
     id: "book-card"
 - extendedWaitUntil:

@@ -16,7 +16,7 @@ name: PDF ekle, sesli oku, duraklat, atla, ara ve kaldığı yerden devam et
     visible:
       text: "%0 · 3 sayfa.*"
     timeout: 90000
-- assertVisible: "Mavi Defter"
+- assertVisible: ".*Mavi Defter.*"
 - takeScreenshot: ${OUT}/02-library-with-pdf
 - tapOn:
     id: "book-card"

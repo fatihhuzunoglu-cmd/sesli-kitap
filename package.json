@@ -37,6 +37,7 @@
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
     "pdfjs-dist": "^6.4.299",
+    "playwright-core": "^1.64.1",
     "tesseract.js": "^7.0.0",
     "tesseract.js-core": "^7.0.0",
     "typescript": "~6.0.3"
@@ -49,7 +50,8 @@
     "ios": "npm run build:engine && expo start --ios",
     "typecheck": "npm run build:engine && tsc --noEmit",
     "test": "node --test \"test/**/*.test.ts\"",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test:engine": "npm run build:engine && node --test --test-concurrency=1 \"test/engine/*.test.mjs\""
   },
   "private": true
 }
