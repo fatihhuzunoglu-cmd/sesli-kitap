@@ -68,7 +68,10 @@ jobs:
           curl -fsSL "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
       - name: Serve test books
-        run: (cd e2e/fixtures && python3 -m http.server 8000 > /tmp/http.log 2>&1 &)
+        run: |
+          (cd e2e/fixtures && nohup python3 -m http.server 8000 --bind 0.0.0.0 > /tmp/http.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/masal.txt && exit 0; sleep 1; done
+          echo "test book server did not start" && cat /tmp/http.log && exit 1
       - name: Run flows on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -144,7 +147,10 @@ jobs:
           curl -fsSL "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
       - name: Serve test books
-        run: (cd e2e/fixtures && python3 -m http.server 8000 > /tmp/http.log 2>&1 &)
+        run: |
+          (cd e2e/fixtures && nohup python3 -m http.server 8000 --bind 0.0.0.0 > /tmp/http.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/masal.txt && exit 0; sleep 1; done
+          echo "test book server did not start" && cat /tmp/http.log && exit 1
       - name: Run flows on simulator
         env:
           MAESTRO_DRIVER_STARTUP_TIMEOUT: 300000

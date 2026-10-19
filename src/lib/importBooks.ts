@@ -107,7 +107,19 @@ export async function importFromUrl(db: SQLiteDatabase, rawUrl: string): Promise
   const tmp = new Directory(Paths.cache, `download-${newId()}`);
   tmp.create({ intermediates: true, idempotent: true });
   try {
-    const file = await File.downloadFileAsync(url, tmp);
+    let file: File;
+    try {
+      file = await File.downloadFileAsync(url, tmp);
+    } catch (e) {
+      const status = String((e as Error).message ?? '').match(/([45]\d\d)/)?.[1];
+      throw new Error(
+        status === '404'
+          ? 'Bu bağlantıda dosya bulunamadı (404). Bağlantıyı kontrol edin.'
+          : status
+            ? `Sunucu dosyayı vermedi (hata ${status}).`
+            : 'Dosya indirilemedi. İnternet bağlantınızı ve bağlantının doğru olduğunu kontrol edin.',
+      );
+    }
     const ext = extensionOf(file.name) || extensionOf(url);
     const format = EXTENSIONS[ext] ?? sniffFormat(file);
     if (!format) throw new Error(`Bu dosya türü desteklenmiyor. Desteklenenler: ${SUPPORTED_LABEL}.`);
