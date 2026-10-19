@@ -17,7 +17,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#B5532A",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -39,6 +39,19 @@
           "photosPermission": "Kitap sayfalarının fotoğraflarını seçip sesli okuyabilmek için fotoğraflarınıza erişim gerekir.",
           "cameraPermission": "Kitap sayfalarını fotoğraflayıp sesli okuyabilmek için kameraya erişim gerekir.",
           "microphonePermission": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#FAF7F2",
+          "dark": {
+            "image": "./assets/splash-icon.png",
+            "backgroundColor": "#141210"
+          }
         }
       ]
     ],

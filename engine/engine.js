@@ -102,25 +102,33 @@
     var warmup = Math.min(8, doc.numPages);
     // Short lines (page numbers like "— 12 —") match with digits ignored; longer ones only when identical.
     var norm = function (t) {
-      var c = cleanSpaces(t).toLowerCase();
+      var c = cleanSpaces(t)
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .trim();
       return c.length <= 40 ? c.replace(/\d+/g, '#') : c;
     };
     // Top two lines are keyed "t:", bottom two "b:". Real running heads repeat on most pages, chapter titles on few,
     // so a line only counts as boilerplate once it shows up on 30% of the pages seen so far.
+    // Edge lines are picked both by vertical position and by content order, since some PDF producers
+    // (and some WebView versions) report text in an order that does not follow the page layout.
     var edgeLines = function (lines) {
-      var order = lines
+      var picks = {};
+      var mark = function (i) {
+        picks[i] = 'e:';
+      };
+      var byY = lines
         .map(function (l, i) {
-          return { i: i, y: l.y };
+          return { i: i, y: typeof l.y === 'number' ? l.y : 0 };
         })
         .sort(function (a, b) {
           return b.y - a.y;
         });
-      var picks = {};
-      order.slice(0, 2).forEach(function (o) {
-        picks[o.i] = 't:';
+      byY.slice(0, 2).concat(byY.slice(-2)).forEach(function (o) {
+        mark(o.i);
       });
-      order.slice(-2).forEach(function (o) {
-        picks[o.i] = 'b:';
+      [0, 1, lines.length - 2, lines.length - 1].forEach(function (i) {
+        if (i >= 0 && i < lines.length) mark(i);
       });
       return picks;
     };

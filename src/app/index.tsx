@@ -147,6 +147,11 @@ export default function Library() {
     ]);
   };
 
+  const recent = useMemo(
+    () => books?.find((b) => b.lastOpenedAt && b.status !== 'error' && b.processedCount > 0 && b.progress < 1) ?? null,
+    [books],
+  );
+
   const visible = useMemo(() => {
     const q = filter.trim().toLocaleLowerCase('tr');
     if (!books || !q) return books;
@@ -192,12 +197,15 @@ export default function Library() {
           columnWrapperStyle={columns > 1 ? { gap: 12 } : undefined}
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={
-            books.length > 3 ? (
-              <View style={s.filter}>
-                <Ionicons name="search" size={18} color={t.muted} />
-                <TextInput value={filter} onChangeText={setFilter} placeholder="Kitaplıkta ara" placeholderTextColor={t.muted} style={s.filterInput} />
-              </View>
-            ) : undefined
+            <View style={{ gap: 12 }}>
+              {recent && !filter ? <ContinueCard book={recent} theme={t} onPress={() => router.push({ pathname: '/reader/[id]', params: { id: recent.id, autoplay: '1' } })} /> : null}
+              {books.length > 3 ? (
+                <View style={s.filter}>
+                  <Ionicons name="search" size={18} color={t.muted} />
+                  <TextInput value={filter} onChangeText={setFilter} placeholder="Kitaplıkta ara" placeholderTextColor={t.muted} style={s.filterInput} />
+                </View>
+              ) : null}
+            </View>
           }
           renderItem={({ item }) => <BookCard book={item} theme={t} onPress={() => open(item)} onLongPress={() => confirmDelete(item)} />}
         />
@@ -252,6 +260,37 @@ export default function Library() {
         </View>
       </Sheet>
     </View>
+  );
+}
+
+function ContinueCard({ book, theme, onPress }: { book: Book; theme: Theme; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      testID="continue-card"
+      accessibilityRole="button"
+      accessibilityLabel={`${book.title} kaldığınız yerden dinlemeye devam et`}
+      style={({ pressed }) => ({
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 14,
+        padding: 16,
+        borderRadius: 16,
+        backgroundColor: theme.accent,
+        opacity: pressed ? 0.85 : 1,
+      })}
+    >
+      <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: theme.accentText, alignItems: 'center', justifyContent: 'center' }}>
+        <Ionicons name="play" size={26} color={theme.accent} style={{ marginLeft: 3 }} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={{ color: theme.accentText, fontSize: 13, opacity: 0.85 }}>Kaldığın yerden dinle</Text>
+        <Text style={{ color: theme.accentText, fontSize: 18, fontWeight: '700' }} numberOfLines={1}>
+          {book.title}
+        </Text>
+        <Text style={{ color: theme.accentText, fontSize: 13, opacity: 0.85 }}>%{Math.round(book.progress * 100)} tamamlandı</Text>
+      </View>
+    </Pressable>
   );
 }
 

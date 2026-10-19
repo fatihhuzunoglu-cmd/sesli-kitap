@@ -30,7 +30,7 @@ const RATE_PRESETS = [0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const SLEEP_MINUTES = [5, 10, 15, 30, 45, 60, 90];
 
 export default function ReaderScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, autoplay } = useLocalSearchParams<{ id: string; autoplay?: string }>();
   const db = useSQLiteContext();
   const [book, setBook] = useState<Book | null>(null);
 
@@ -46,12 +46,12 @@ export default function ReaderScreen() {
   useBooksChanged(reloadBook);
 
   if (!book) return <ActivityIndicator style={{ marginTop: 48 }} />;
-  return <Reader book={book} />;
+  return <Reader book={book} autoplay={autoplay === '1'} />;
 }
 
 type Panel = null | 'toc' | 'speed' | 'sleep' | 'appearance';
 
-function Reader({ book }: { book: Book }) {
+function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
   const db = useSQLiteContext();
   const t = useTheme();
   const prefs = usePrefs();
@@ -75,7 +75,10 @@ function Reader({ book }: { book: Book }) {
     void getPosition(db, book.id).then(async (pos) => {
       await narrator.initialise(pos ?? { sectionIdx: 0, sentenceIdx: 0 });
       setReady(true);
+      if (autoplay) narrator.play();
     });
+    // Autoplay applies only to the first open of this screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, book.id, narrator]);
 
   useEffect(() => {
