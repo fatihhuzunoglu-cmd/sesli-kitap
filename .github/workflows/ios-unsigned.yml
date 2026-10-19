@@ -1,5 +1,5 @@
 # Builds an unsigned Release .ipa (JS bundle embedded) for sideloading; Sideloadly signs it with the user's Apple ID.
-name: iOS unsigned IPA
+name: Release builds
 
 on:
   workflow_dispatch:
@@ -60,4 +60,34 @@ jobs:
         with:
           name: SesliKitap-ipa
           path: out/SesliKitap.ipa
+          retention-days: 30
+
+  android-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - run: npm run build:engine
+      - name: Generate native Android project
+        run: npx expo prebuild --platform android --no-install
+      - name: Build release APK (phones and tablets, arm64 + armv7)
+        run: cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a --no-daemon
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk out/SesliKitap.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SesliKitap-apk
+          path: out/SesliKitap.apk
           retention-days: 30
