@@ -268,6 +268,17 @@
     return { text: text, images: images, sources: sources };
   }
 
+  // Short text of the first heading in a chapter document, used when the table of contents gives no title.
+  function firstHeading(doc) {
+    var h = null;
+    ['h1', 'h2', 'h3'].some(function (name) {
+      h = allByLocalName(doc, name)[0] || null;
+      return !!h;
+    });
+    var t = h ? (h.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    return t && t.length <= 80 ? t : null;
+  }
+
   function parseMarkup(str, preferXml) {
     var parser = new DOMParser();
     if (preferXml) {
@@ -373,12 +384,14 @@
       var item = spine[i];
       var f = zip.file(item.href);
       var res = { text: '', images: 0 };
+      var heading = null;
       if (f) {
         var d = parseMarkup(await f.async('string'), true);
         res = nodeText(d.body || d.documentElement);
+        heading = firstHeading(d);
       }
       if (titles[item.href]) lastTitle = titles[item.href];
-      var sectionTitle = titles[item.href] || lastTitle || 'Bölüm ' + (i + 1);
+      var sectionTitle = titles[item.href] || heading || lastTitle || 'Bölüm ' + (i + 1);
       var needsOcr = res.images > 0 && res.text.replace(/\s/g, '').length < 20;
       post({ type: 'section', jobId: job.id, index: i, title: sectionTitle, text: res.text, needsOcr: needsOcr });
       if (needsOcr) {
@@ -643,7 +656,120 @@
     await runOcr(job);
   }
 
-  var EXTRACTORS = { pdf: extractPdf, epub: extractEpub, txt: extractTxt, html: extractHtml, fb2: extractFb2, images: extractImages };
+  // ---------- Sections from block elements (DOCX) ----------
+  // Starts a new section at every top-level heading, and splits very long stretches so pages stay light.
+  function sectionsByHeadings(root, fallbackTitle) {
+    var sections = [];
+    var cur = { title: null, parts: [], size: 0 };
+    var flush = function () {
+      if (cur.parts.length) sections.push({ title: cur.title, text: cur.parts.join('\n') });
+      cur = { title: null, parts: [], size: 0 };
+    };
+    for (var el = root.firstElementChild; el; el = el.nextElementSibling) {
+      var tag = el.tagName.toUpperCase();
+      var text = nodeText(el).text;
+      if (!text) continue;
+      if (tag === 'H1' || tag === 'H2') {
+        flush();
+        cur.title = cleanSpaces(text).slice(0, 80);
+      } else if (cur.size > 6000) {
+        var title = cur.title;
+        flush();
+        cur.title = title;
+      }
+      cur.parts.push(text);
+      cur.size += text.length;
+    }
+    flush();
+    return sections.map(function (sec, i) {
+      return { title: sec.title || fallbackTitle + ' ' + (i + 1), text: sec.text };
+    });
+  }
+
+  // ---------- DOCX ----------
+  async function extractDocx(job, bytes) {
+    var res = await mammoth.convertToHtml({ arrayBuffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) });
+    var doc = parseMarkup('<body>' + res.value + '</body>', false);
+    var sections = sectionsByHeadings(doc.body, 'Bölüm');
+    var core = null;
+    try {
+      var zip = await JSZip.loadAsync(bytes);
+      if (zip.file('docProps/core.xml')) core = parseMarkup(await zip.file('docProps/core.xml').async('string'), true);
+    } catch (e) {}
+    var meta = function (name) {
+      var el = core && firstByLocalName(core, name);
+      return el ? cleanSpaces(el.textContent || '') || null : null;
+    };
+    post({ type: 'meta', jobId: job.id, title: meta('title'), author: meta('creator'), language: meta('language'), sectionCount: sections.length });
+    sections.forEach(function (sec, i) {
+      post({ type: 'section', jobId: job.id, index: i, title: sec.title, text: sec.text, needsOcr: false });
+    });
+  }
+
+  // ---------- MOBI / AZW3 (Kindle) ----------
+  async function extractMobi(job, bytes) {
+    var reader = new FoliateMOBI({
+      unzlib: function () {
+        return Promise.resolve(new Uint8Array(0));
+      },
+    });
+    var book;
+    try {
+      book = await reader.open(new Blob([bytes]));
+    } catch (e) {
+      var msg = String((e && e.message) || e);
+      if (/encrypt|drm/i.test(msg)) throw new Error('Bu Kindle kitabı DRM ile korunuyor ve okunamıyor.');
+      throw new Error('Kindle (MOBI/AZW3) dosyası okunamadı.');
+    }
+    var meta = book.metadata || {};
+    var author = Array.isArray(meta.author) ? meta.author.join(', ') : meta.author;
+    var titles = {};
+    (function walk(items) {
+      (items || []).forEach(function (item) {
+        try {
+          var resolved = book.resolveHref(item.href);
+          if (resolved && titles[resolved.index] == null && item.label) titles[resolved.index] = cleanSpaces(item.label);
+        } catch (e) {}
+        walk(item.subitems);
+      });
+    })(book.toc);
+    var sections = book.sections.filter(function (sec) {
+      return sec.linear !== 'no';
+    });
+    post({
+      type: 'meta',
+      jobId: job.id,
+      title: typeof meta.title === 'string' ? meta.title : null,
+      author: author || null,
+      language: Array.isArray(meta.language) ? meta.language[0] : meta.language || null,
+      sectionCount: sections.length,
+    });
+    var lastTitle = null;
+    for (var i = 0; i < sections.length; i++) {
+      if (job.cancelled) return;
+      var text = '';
+      var heading = null;
+      try {
+        var doc = await sections[i].createDocument();
+        text = nodeText(doc.body || doc.documentElement).text;
+        heading = firstHeading(doc);
+      } catch (e) {}
+      var idx = book.sections.indexOf(sections[i]);
+      if (titles[idx]) lastTitle = titles[idx];
+      post({ type: 'section', jobId: job.id, index: i, title: titles[idx] || heading || lastTitle || 'Bölüm ' + (i + 1), text: text, needsOcr: false });
+    }
+  }
+
+  var EXTRACTORS = {
+    pdf: extractPdf,
+    epub: extractEpub,
+    txt: extractTxt,
+    html: extractHtml,
+    fb2: extractFb2,
+    images: extractImages,
+    docx: extractDocx,
+    mobi: extractMobi,
+  };
 
   window.engine = {
     begin: function (jobId, kind) {

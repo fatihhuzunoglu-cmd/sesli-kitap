@@ -272,6 +272,8 @@ function MenuItem({ theme, icon, title, body, onPress, testID }: { theme: Theme;
   );
 }
 
+const FORMAT_LABEL: Partial<Record<Book['format'], string>> = { images: 'FOTOĞRAF', mobi: 'KINDLE', docx: 'WORD' };
+
 function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Theme; onPress: () => void; onLongPress: () => void }) {
   const s = styles(theme);
   const processing = book.status === 'processing';
@@ -301,7 +303,7 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
       testID="book-card"
     >
       <View style={s.cardTop}>
-        <Text style={s.badge}>{book.format === 'images' ? 'FOTOĞRAF' : book.format.toUpperCase()}</Text>
+        <Text style={s.badge}>{FORMAT_LABEL[book.format] ?? book.format.toUpperCase()}</Text>
         {processing && book.processedCount > 0 && <Text style={s.readable}>Okunabilir</Text>}
       </View>
       <Text style={s.title} numberOfLines={2}>

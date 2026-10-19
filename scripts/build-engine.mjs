@@ -1,4 +1,4 @@
-// Bundles pdf.js, JSZip and engine/engine.js into a single offline HTML string for the extractor WebView.
+// Bundles pdf.js, JSZip, Tesseract, mammoth, foliate's MOBI reader and engine/engine.js into a single offline HTML string for the extractor WebView.
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +22,12 @@ const pdf = toClassicScript(read('node_modules/pdfjs-dist/legacy/build/pdf.min.m
 const worker = toClassicScript(read('node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs'), 'pdf.worker');
 const jszip = toClassicScript(read('node_modules/jszip/dist/jszip.min.js'), 'jszip');
 const tesseract = toClassicScript(read('node_modules/tesseract.js/dist/tesseract.min.js'), 'tesseract');
+const mammoth = toClassicScript(read('node_modules/mammoth/mammoth.browser.min.js'), 'mammoth');
+// foliate-js mobi.js (MIT, vendored) is an ES module with inline exports; expose its MOBI class as a global instead.
+const mobi = toClassicScript(
+  read('engine/vendor/mobi.js').replace(/^export (?=(const|class|function|async function) )/gm, '') + '\nglobalThis.FoliateMOBI = MOBI;\n',
+  'mobi',
+);
 const engine = toClassicScript(read('engine/engine.js'), 'engine');
 
 const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>
@@ -30,6 +36,8 @@ const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>
 <script>${tesseract}</script>
 <script>${worker}</script>
 <script>${pdf}</script>
+<script>${mammoth}</script>
+<script>${mobi}</script>
 <script>${engine}</script>
 </body></html>`;
 

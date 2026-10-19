@@ -13,11 +13,16 @@ const EXTENSIONS: Record<string, BookFormat> = {
   htm: 'html',
   xhtml: 'html',
   fb2: 'fb2',
+  docx: 'docx',
+  mobi: 'mobi',
+  azw3: 'mobi',
+  azw: 'mobi',
+  prc: 'mobi',
 };
 
-export const NOT_YET_SUPPORTED = ['mobi', 'azw', 'azw3', 'kfx', 'djvu', 'docx', 'doc', 'rtf', 'cbz', 'cbr', 'odt'];
+export const NOT_YET_SUPPORTED = ['kfx', 'djvu', 'doc', 'rtf', 'cbz', 'cbr', 'odt', 'pages'];
 
-export const SUPPORTED_LABEL = 'PDF, EPUB, TXT, FB2, HTML';
+export const SUPPORTED_LABEL = 'PDF, EPUB, MOBI, AZW3, DOCX, FB2, TXT, HTML';
 
 export type ImportResult = { imported: string[]; rejected: string[] };
 
@@ -57,7 +62,8 @@ function sniffFormat(file: File): BookFormat | null {
   }
   const ascii = String.fromCharCode(...head.slice(0, 512));
   if (ascii.startsWith('%PDF')) return 'pdf';
-  if (head[0] === 0x50 && head[1] === 0x4b) return ascii.includes('epub') ? 'epub' : null;
+  if (ascii.slice(60, 68) === 'BOOKMOBI') return 'mobi';
+  if (head[0] === 0x50 && head[1] === 0x4b) return ascii.includes('epub') ? 'epub' : ascii.includes('word/') ? 'docx' : null;
   if (/<FictionBook/i.test(ascii)) return 'fb2';
   if (/<html|<!doctype html/i.test(ascii)) return 'html';
   if (!head.slice(0, 512).some((b) => b === 0)) return 'txt';
