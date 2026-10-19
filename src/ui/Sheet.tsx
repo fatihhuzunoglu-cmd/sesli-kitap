@@ -10,18 +10,21 @@ export function Sheet({
   onClose,
   children,
   tall,
+  action,
 }: {
   visible: boolean;
   title: string;
   onClose: () => void;
   children: ReactNode;
   tall?: boolean;
+  // Primary button shown next to the title, so it stays reachable while the keyboard is open.
+  action?: { label: string; onPress: () => void; disabled?: boolean; testID?: string };
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Kapat" />
         <View
           style={[
@@ -31,7 +34,20 @@ export function Sheet({
           ]}
         >
           <View style={styles.header}>
-            <Text style={[styles.title, { color: t.text }]}>{title}</Text>
+            <Text style={[styles.title, { color: t.text, flex: 1 }]} numberOfLines={1}>
+              {title}
+            </Text>
+            {action ? (
+              <Pressable
+                onPress={action.onPress}
+                disabled={action.disabled}
+                accessibilityRole="button"
+                testID={action.testID}
+                style={({ pressed }) => [styles.action, { backgroundColor: t.accent, opacity: pressed || action.disabled ? 0.6 : 1 }]}
+              >
+                <Text style={{ color: t.accentText, fontWeight: '700', fontSize: 15 }}>{action.label}</Text>
+              </Pressable>
+            ) : null}
             <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Kapat" testID="sheet-close">
               <Ionicons name="close" size={24} color={t.muted} />
             </Pressable>
@@ -55,6 +71,7 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 12 },
+  action: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 18 },
   title: { fontSize: 19, fontWeight: '700' },
 });

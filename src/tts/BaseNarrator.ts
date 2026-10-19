@@ -149,21 +149,22 @@ export abstract class BaseNarrator {
     void this.jump(await this.stepBack(this.state.position));
   };
 
+  // Page turns show blank pages as they are; only reading aloud skips them.
   goToSection = async (idx: number) => {
-    await this.jump({ sectionIdx: this.clamp(idx), sentenceIdx: 0 });
+    await this.jump({ sectionIdx: this.clamp(idx), sentenceIdx: 0 }, false);
   };
 
   goTo = async (pos: Position) => {
     await this.jump({ sectionIdx: this.clamp(pos.sectionIdx), sentenceIdx: pos.sentenceIdx });
   };
 
-  private async jump(target: Position) {
+  private async jump(target: Position, skipEmpty = true) {
     if (this.state.playing) {
       await this.startFrom(target);
       return;
     }
     this.halt();
-    const pos = (await this.normalise(target)) ?? target;
+    const pos = skipEmpty ? ((await this.normalise(target)) ?? target) : target;
     await this.show(pos.sectionIdx);
     this.commit(pos);
   }

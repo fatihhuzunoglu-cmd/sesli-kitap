@@ -111,7 +111,9 @@ for (const [name, launch] of engines) {
     assert.equal(r.sections.length, 3);
     assert.match(r.sections[0].text, /Elif adında meraklı bir kız/);
     assert.doesNotMatch(r.sections.map((s) => s.text).join('\n'), /Mavi Defter/);
-    assert.equal(r.sections[1].needsOcr, true);
+    // Page 2 is blank apart from the footer and has no image, so it is not sent to OCR.
+    assert.equal(r.sections[1].needsOcr, false);
+    assert.equal(r.sections[1].text, '');
   });
 
   test(`${name}: EPUB chapters and metadata`, async () => {

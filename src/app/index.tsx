@@ -221,7 +221,7 @@ export default function Library() {
         </View>
       </Sheet>
 
-      <Sheet visible={mode === 'url'} title="Bağlantıdan ekle" onClose={() => setMode(null)}>
+      <Sheet visible={mode === 'url'} title="Bağlantıdan ekle" onClose={() => setMode(null)} action={{ label: 'İndir', onPress: addFromUrl, disabled: busy }}>
         <View style={{ paddingHorizontal: 16, gap: 12 }}>
           <TextInput
             value={url}
@@ -241,8 +241,8 @@ export default function Library() {
         </View>
       </Sheet>
 
-      <Sheet visible={mode === 'text'} title="Metin yapıştır" onClose={() => setMode(null)} tall>
-        <View style={{ paddingHorizontal: 16, gap: 12, flex: 1 }}>
+      <Sheet visible={mode === 'text'} title="Metin yapıştır" onClose={() => setMode(null)} action={{ label: 'Ekle', onPress: addFromText, disabled: busy, testID: 'paste-submit' }}>
+        <View style={{ paddingHorizontal: 16, gap: 12 }}>
           <TextInput value={pasteTitle} onChangeText={setPasteTitle} placeholder="Başlık (isteğe bağlı)" placeholderTextColor={t.muted} style={s.input} testID="paste-title" />
           <TextInput
             value={pasteText}
@@ -251,12 +251,9 @@ export default function Library() {
             placeholderTextColor={t.muted}
             multiline
             textAlignVertical="top"
-            style={[s.input, { flex: 1, minHeight: 160 }]}
+            style={[s.input, { height: 220 }]}
             testID="paste-text"
           />
-          <Pressable style={s.primary} onPress={addFromText} disabled={busy} testID="paste-submit">
-            <Text style={s.primaryText}>Ekle</Text>
-          </Pressable>
         </View>
       </Sheet>
     </View>

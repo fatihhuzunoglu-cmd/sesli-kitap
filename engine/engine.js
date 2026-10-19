@@ -130,6 +130,7 @@
     // Running headers/footers (book title, chapter name, "Sayfa 12") repeat on many pages and should not be read aloud.
     // Their shape is learned from the top/bottom lines of every page; the first pages are held back until it is known.
     var counts = {};
+    var hasImage = {};
     var seen = 0;
     var held = [];
     var warmup = Math.min(8, doc.numPages);
@@ -178,7 +179,8 @@
           return l.text;
         });
       var text = linesToParagraphs(kept);
-      var needsOcr = text.replace(/\s/g, '').length < 20;
+      // Only pages that actually draw an image are scans; text-less pages without one are just blank.
+      var needsOcr = text.replace(/\s/g, '').length < 20 && !!hasImage[pageNo];
       post({ type: 'section', jobId: job.id, index: pageNo - 1, title: 'Sayfa ' + pageNo, text: text, needsOcr: needsOcr });
       if (needsOcr) {
         job.ocr.push({
@@ -218,6 +220,10 @@
         lines = lines.filter(function (l) {
           return cleanSpaces(l.text).length > 0;
         });
+        var rawChars = lines.reduce(function (n, l) {
+          return n + l.text.replace(/\s/g, '').length;
+        }, 0);
+        if (rawChars < 200) hasImage[p] = await pageHasImage(page);
         page.cleanup();
       } catch (e) {
         lines = [];
@@ -249,6 +255,18 @@
     });
     await runOcr(job);
     await task.destroy();
+  }
+
+  async function pageHasImage(page) {
+    try {
+      var OPS = globalThis.pdfjsLib.OPS;
+      var ops = await page.getOperatorList();
+      return ops.fnArray.some(function (fn) {
+        return fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject || fn === OPS.paintImageMaskXObject || fn === OPS.paintImageXObjectRepeat;
+      });
+    } catch (e) {
+      return true;
+    }
   }
 
   async function renderPdfPage(doc, pageNo) {

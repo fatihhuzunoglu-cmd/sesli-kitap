@@ -34,31 +34,38 @@ name: PDF ekle, sesli oku, duraklat, atla, ara ve kaldığı yerden devam et
 - takeScreenshot: ${OUT}/04-reading-sentence-2
 - tapOn:
     id: "play-button"
-- tapOn:
-    id: "next-sentence"
-- assertVisible:
-    text: ".*Cümle 3/3.*"
-- tapOn:
-    id: "prev-sentence"
-- assertVisible:
-    text: ".*Cümle 2/3.*"
-# Page 2 is blank: next page skips straight past it when read aloud, but the user can still open it.
+# Paused from here on, so every step below is deterministic.
 - tapOn:
     id: "next-section"
 - assertVisible:
     id: "empty-section"
+- assertVisible:
+    text: "Sayfa 2/3.*"
 - takeScreenshot: ${OUT}/05-blank-page
 - tapOn:
     id: "next-section"
 - assertVisible:
-    text: "Sayfa 3/3.*"
+    text: "Sayfa 3/3 · Cümle 1/3.*"
+- tapOn:
+    id: "next-sentence"
+- assertVisible:
+    text: "Sayfa 3/3 · Cümle 2/3.*"
+- tapOn:
+    id: "prev-sentence"
+- assertVisible:
+    text: "Sayfa 3/3 · Cümle 1/3.*"
+# Stepping back from the first sentence skips the blank page and lands on the last sentence of page 1.
+- tapOn:
+    id: "prev-sentence"
+- assertVisible:
+    text: "Sayfa 1/3 · Cümle 3/3.*"
 - tapOn:
     id: "toc-button"
 - tapOn:
     id: "tab-search"
 - tapOn:
     id: "search-input"
-- inputText: "kütüphane"
+- inputText: "defter"
 - pressKey: Enter
 - extendedWaitUntil:
     visible:
@@ -69,7 +76,7 @@ name: PDF ekle, sesli oku, duraklat, atla, ara ve kaldığı yerden devam et
     id: "search-hit"
     index: 0
 - assertVisible:
-    text: "Sayfa 1/3 · Cümle 2/3.*"
+    text: "Sayfa 1/3 · Cümle 3/3.*"
 - tapOn:
     id: "bookmark-button"
 - tapOn:
@@ -92,7 +99,7 @@ name: PDF ekle, sesli oku, duraklat, atla, ara ve kaldığı yerden devam et
     id: "book-card"
 - extendedWaitUntil:
     visible:
-      text: "Sayfa 1/3 · Cümle 2/3.*"
+      text: "Sayfa 1/3 · Cümle 3/3.*"
     timeout: 30000
 - assertVisible: "1.5×"
 - takeScreenshot: ${OUT}/08-resumed
@@ -100,5 +107,5 @@ name: PDF ekle, sesli oku, duraklat, atla, ara ve kaldığı yerden devam et
     id: "toc-button"
 - tapOn:
     id: "tab-bookmarks"
-- assertVisible: "Elif her sabah kütüphaneye gider.*"
+- assertVisible: ".*mavi bir defter bulmuş.*"
 - takeScreenshot: ${OUT}/09-bookmarks

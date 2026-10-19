@@ -26,7 +26,7 @@ name: EPUB ekle, ses seç, bölümler arası kesintisiz okuma
 - tapOn:
     id: "voice-button"
 - extendedWaitUntil:
-    visible: "Sistem varsayılanı"
+    visible: ".*Sistem varsayılanı.*"
     timeout: 20000
 - takeScreenshot: ${OUT}/10-voices-en
 - back
