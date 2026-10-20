@@ -39,6 +39,22 @@
     window.ReactNativeWebView.postMessage(JSON.stringify(msg));
   };
 
+  // pdf.js and Tesseract report problems on the console, which a WebView keeps to itself; pass them to the app's log.
+  ['warn', 'error'].forEach(function (level) {
+    var original = console[level];
+    console[level] = function () {
+      try {
+        post({ type: 'log', level: level, message: Array.prototype.map.call(arguments, String).join(' ').slice(0, 800) });
+      } catch (e) {}
+      return original.apply(console, arguments);
+    };
+  });
+  var originalLog = console.log;
+  console.log = function (first) {
+    if (typeof first === 'string' && /^Warning:/.test(first)) console.warn.apply(console, arguments);
+    else originalLog.apply(console, arguments);
+  };
+
   var jobs = {};
 
   function b64ToBytes(b64) {
@@ -636,7 +652,10 @@
       // OCR often breaks a paragraph where a line happens to be short; rejoin mid-sentence splits.
       .reduce(function (acc, p) {
         var prev = acc[acc.length - 1];
-        if (prev && !/[.!?…:;"”»)]$/.test(prev) && /^[a-zçğıöşüâîû]/.test(p)) acc[acc.length - 1] = prev + ' ' + p;
+        var lower = /^[a-zçğıöşüâîû]/.test(p);
+        // A word hyphenated at the end of a line ("işve-" + "reniyim") is joined back together.
+        if (prev && lower && /[A-Za-zÇĞİÖŞÜçğıöşüÂâÎîÛû]-$/.test(prev)) acc[acc.length - 1] = prev.slice(0, -1) + p;
+        else if (prev && lower && !/[.!?…:;"”»)]$/.test(prev)) acc[acc.length - 1] = prev + ' ' + p;
         else acc.push(p);
         return acc;
       }, [])
@@ -734,6 +753,7 @@
           }
         }
       } catch (e) {
+        console.warn('OCR failed on ' + item.title + ': ' + ((e && e.message) || e));
         texts = [];
       }
       var text = texts.filter(Boolean).join('\n');

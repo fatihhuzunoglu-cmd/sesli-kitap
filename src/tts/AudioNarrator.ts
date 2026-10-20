@@ -52,6 +52,8 @@ export class AudioNarrator extends BaseNarrator {
   }
 
   pause = () => {
+    // Status updates already on their way may still say "playing"; they must not undo the pause.
+    this.switchedAt = Date.now();
     this.player?.pause();
     this.set({ playing: false, buffering: false });
   };

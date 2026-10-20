@@ -20,6 +20,7 @@ type EngineMessage =
   | { type: 'section'; jobId: string; index: number; title: string; text: string; needsOcr: boolean; ocr?: boolean }
   | { type: 'ocrNeeded'; jobId: string; count: number }
   | { type: 'ocrProgress'; jobId: string; done: number; total: number }
+  | { type: 'log'; level: string; message: string }
   | { type: 'done' | 'cancelled'; jobId: string }
   | { type: 'error'; jobId: string; message: string };
 
@@ -216,6 +217,10 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
       const msg = JSON.parse(e.nativeEvent.data) as EngineMessage;
       if (msg.type === 'ready') {
         ready.current.resolve();
+        return;
+      }
+      if (msg.type === 'log') {
+        console.warn(`[engine] ${msg.message}`);
         return;
       }
       const s = streams.current.get(msg.jobId);
