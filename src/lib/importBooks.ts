@@ -1,7 +1,8 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, FileMode, Paths } from 'expo-file-system';
 import type { SQLiteDatabase } from 'expo-sqlite';
-import { insertBook, type BookFormat } from '@/db/database';
+import { findTranslation, insertBook, listBookIds, updateBook, type Book, type BookFormat } from '@/db/database';
+import { languageLabel } from './voices';
 
 const EXTENSIONS: Record<string, BookFormat> = {
   pdf: 'pdf',
@@ -140,25 +141,66 @@ export async function importText(db: SQLiteDatabase, title: string, text: string
   }
 }
 
+// Copies page photos into a photo book's folder, numbered after the pages already there. Returns the bytes added.
+async function copyPhotos(dir: Directory, uris: string[]) {
+  const existing = dir.list().filter((e): e is File => e instanceof File);
+  let next = existing.reduce((n, f) => Math.max(n, parseInt(f.name, 10) || 0), 0);
+  let size = 0;
+  for (const uri of uris) {
+    const source = new File(uri);
+    const ext = extensionOf(source.name) || 'jpg';
+    const dest = new File(dir, `${String(++next).padStart(4, '0')}.${ext}`);
+    await source.copy(dest);
+    size += dest.size ?? 0;
+  }
+  return size;
+}
+
 // Page photos become one book: a folder of numbered images that the engine reads with OCR.
 export async function importPhotos(db: SQLiteDatabase, uris: string[], title: string): Promise<string> {
   if (!uris.length) throw new Error('Fotoğraf seçilmedi.');
   const id = newId();
   const dir = new Directory(booksDir(), id);
   dir.create({ intermediates: true, idempotent: true });
-  let size = 0;
-  for (let i = 0; i < uris.length; i++) {
-    const source = new File(uris[i]);
-    const ext = extensionOf(source.name) || 'jpg';
-    const dest = new File(dir, `${String(i + 1).padStart(4, '0')}.${ext}`);
-    await source.copy(dest);
-    size += dest.size ?? 0;
-  }
+  const size = await copyPhotos(dir, uris);
   await insertBook(db, { id, title: title.trim() || 'Fotoğraflanan sayfalar', format: 'images', fileUri: dir.uri, size });
   return id;
 }
 
+// Adds more page photos to the end of a photo book. Returns the books to (re)process: the book and its translations,
+// which then only recognise and translate the new pages.
+export async function addPhotosToBook(db: SQLiteDatabase, book: Book, uris: string[]): Promise<string[]> {
+  if (!uris.length) return [];
+  const dir = new Directory(book.fileUri);
+  const added = await copyPhotos(dir, uris);
+  await updateBook(db, book.id, { size: book.size + added, status: 'processing', error: null });
+  const translations = await listBookIds(db, { sourceId: book.id });
+  for (const id of translations) await updateBook(db, id, { status: 'processing', error: null });
+  return [book.id, ...translations];
+}
+
+// Creates (or finds) the translation of a book into `language`. Its pages are filled in by the translation queue.
+export async function createTranslation(db: SQLiteDatabase, source: Book, language: string): Promise<string> {
+  const existing = await findTranslation(db, source.id, language);
+  if (existing) return existing;
+  const id = newId();
+  await insertBook(db, {
+    id,
+    title: `${source.title} (${languageLabel(language)})`,
+    author: source.author,
+    format: 'translation',
+    fileUri: '',
+    size: 0,
+    language,
+    sourceId: source.id,
+    translateTo: language,
+  });
+  await updateBook(db, id, { section_count: source.sectionCount });
+  return id;
+}
+
 export function deleteBookFile(fileUri: string) {
+  if (!fileUri) return;
   const dir = new Directory(fileUri);
   if (dir.exists) {
     dir.delete();

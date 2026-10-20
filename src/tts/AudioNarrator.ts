@@ -83,15 +83,16 @@ export class AudioNarrator extends BaseNarrator {
     this.halt();
     const session = this.session;
     this.dir.create({ idempotent: true, intermediates: true });
-    const pos = await this.normalise(from);
+    // Shown as playing (buffering) right away: the first page may still be waiting for OCR or translation.
+    this.set({ playing: true, buffering: true });
+    const pos = await this.normalise(from, session);
     if (session !== this.session) return;
-    if (!pos) {
+    if (!pos || !this.state.playing) {
       this.set({ playing: false, buffering: false });
       return;
     }
     await this.show(pos.sectionIdx);
     this.commit(pos);
-    this.set({ playing: true, buffering: true });
     this.cursor = pos;
     this.starved = true;
     this.ensurePlayer();
@@ -103,7 +104,7 @@ export class AudioNarrator extends BaseNarrator {
     this.filling = true;
     try {
       while (session === this.session && this.cursor && this.queue.length < AHEAD) {
-        const pos = await this.normalise(this.cursor);
+        const pos = await this.normalise(this.cursor, session);
         if (session !== this.session) return;
         if (!pos) {
           this.cursor = null;

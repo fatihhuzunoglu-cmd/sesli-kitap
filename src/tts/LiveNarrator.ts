@@ -33,10 +33,11 @@ export class LiveNarrator extends BaseNarrator {
   protected async startFrom(from: Position) {
     this.halt();
     const session = this.session;
-    const pos = await this.normalise(from);
+    this.set({ playing: true, buffering: true });
+    const pos = await this.normalise(from, session);
     if (session !== this.session) return;
-    if (!pos) {
-      this.set({ playing: false });
+    if (!pos || !this.state.playing) {
+      this.set({ playing: false, buffering: false });
       return;
     }
     const current = (await this.show(pos.sectionIdx))!;

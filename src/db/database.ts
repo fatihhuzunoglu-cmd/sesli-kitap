@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-export type BookFormat = 'pdf' | 'epub' | 'txt' | 'html' | 'fb2' | 'images' | 'docx' | 'mobi';
+// 'translation' books have no file: their sections are translated from another book (source_id).
+export type BookFormat = 'pdf' | 'epub' | 'txt' | 'html' | 'fb2' | 'images' | 'docx' | 'mobi' | 'translation';
 export type BookStatus = 'processing' | 'ready' | 'error';
 
 export type Book = {
@@ -19,9 +20,16 @@ export type Book = {
   addedAt: number;
   lastOpenedAt: number | null;
   progress: number;
+  sourceId: string | null;
+  // Format of the book a translation was made from, which decides whether its sections are pages or chapters.
+  sourceFormat: BookFormat | null;
+  translateTo: string | null;
 };
 
-export type Section = { idx: number; title: string; text: string; needsOcr: boolean };
+// needs_ocr: 0 = text is final, 1 = image page waiting for OCR, 2 = OCR found no text on it.
+export type OcrState = 0 | 1 | 2;
+export type Section = { idx: number; title: string; text: string; needsOcr: boolean; ocrPending: boolean };
+export type SectionInput = { idx: number; title: string; text: string; ocr: OcrState };
 export type Position = { sectionIdx: number; sentenceIdx: number };
 
 const MIGRATIONS: string[] = [
@@ -63,6 +71,8 @@ const MIGRATIONS: string[] = [
     created_at INTEGER NOT NULL
   );
   CREATE INDEX bookmarks_book ON bookmarks(book_id, section_idx, sentence_idx);`,
+  `ALTER TABLE books ADD COLUMN source_id TEXT;
+  ALTER TABLE books ADD COLUMN translate_to TEXT;`,
 ];
 
 export async function migrate(db: SQLiteDatabase) {
@@ -76,10 +86,6 @@ export async function migrate(db: SQLiteDatabase) {
     version++;
     await db.execAsync(`PRAGMA user_version = ${version}`);
   }
-  // A book still "processing" at launch was interrupted when the app was closed.
-  await db.runAsync(
-    `UPDATE books SET status = 'error', error = 'İşlem yarıda kaldı. Yeniden işlemek için dokunun.' WHERE status = 'processing'`,
-  );
 }
 
 type BookRow = {
@@ -98,12 +104,16 @@ type BookRow = {
   added_at: number;
   last_opened_at: number | null;
   section_idx: number | null;
+  source_id: string | null;
+  source_format: BookFormat | null;
+  translate_to: string | null;
 };
 
 const BOOK_SELECT = `
   SELECT b.*,
     (SELECT COUNT(*) FROM sections s WHERE s.book_id = b.id) AS processed_count,
-    (SELECT COUNT(*) FROM sections s WHERE s.book_id = b.id AND s.needs_ocr = 1) AS ocr_pending_count,
+    (SELECT COUNT(*) FROM sections s WHERE s.book_id = b.id AND s.needs_ocr > 0) AS ocr_pending_count,
+    (SELECT src.format FROM books src WHERE src.id = b.source_id) AS source_format,
     p.section_idx
   FROM books b LEFT JOIN positions p ON p.book_id = b.id`;
 
@@ -125,6 +135,9 @@ function toBook(r: BookRow): Book {
     addedAt: r.added_at,
     lastOpenedAt: r.last_opened_at,
     progress,
+    sourceId: r.source_id,
+    sourceFormat: r.source_format,
+    translateTo: r.translate_to,
   };
 }
 
@@ -140,23 +153,53 @@ export async function getBook(db: SQLiteDatabase, id: string): Promise<Book | nu
 
 export async function insertBook(
   db: SQLiteDatabase,
-  b: Pick<Book, 'id' | 'title' | 'format' | 'fileUri' | 'size'>,
+  b: Pick<Book, 'id' | 'title' | 'format' | 'fileUri' | 'size'> & Partial<Pick<Book, 'author' | 'language' | 'sourceId' | 'translateTo'>>,
 ) {
   await db.runAsync(
-    `INSERT INTO books (id, title, format, file_uri, size, status, added_at) VALUES (?, ?, ?, ?, ?, 'processing', ?)`,
+    `INSERT INTO books (id, title, author, format, file_uri, size, language, source_id, translate_to, status, added_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?)`,
     b.id,
     b.title,
+    b.author ?? null,
     b.format,
     b.fileUri,
     b.size,
+    b.language ?? 'tr',
+    b.sourceId ?? null,
+    b.translateTo ?? null,
     Date.now(),
   );
+}
+
+export async function listBookIds(db: SQLiteDatabase, where: { status?: BookStatus; sourceId?: string }) {
+  const rows = await db.getAllAsync<{ id: string }>(
+    'SELECT id FROM books WHERE (? IS NULL OR status = ?) AND (? IS NULL OR source_id = ?) ORDER BY added_at',
+    where.status ?? null,
+    where.status ?? null,
+    where.sourceId ?? null,
+    where.sourceId ?? null,
+  );
+  return rows.map((r) => r.id);
+}
+
+export async function findTranslation(db: SQLiteDatabase, sourceId: string, language: string) {
+  const r = await db.getFirstAsync<{ id: string }>('SELECT id FROM books WHERE source_id = ? AND translate_to = ?', sourceId, language);
+  return r?.id ?? null;
 }
 
 export async function updateBook(
   db: SQLiteDatabase,
   id: string,
-  fields: Partial<{ title: string; author: string | null; language: string; section_count: number; status: BookStatus; error: string | null; last_opened_at: number }>,
+  fields: Partial<{
+    title: string;
+    author: string | null;
+    language: string;
+    section_count: number;
+    size: number;
+    status: BookStatus;
+    error: string | null;
+    last_opened_at: number;
+  }>,
 ) {
   const keys = Object.keys(fields) as (keyof typeof fields)[];
   if (!keys.length) return;
@@ -171,19 +214,21 @@ export async function deleteBook(db: SQLiteDatabase, id: string) {
   await db.runAsync('DELETE FROM books WHERE id = ?', id);
 }
 
-export async function clearSections(db: SQLiteDatabase, bookId: string) {
-  await db.runAsync('DELETE FROM sections WHERE book_id = ?', bookId);
-}
-
-export async function insertSection(db: SQLiteDatabase, bookId: string, s: Section) {
+export async function insertSection(db: SQLiteDatabase, bookId: string, s: SectionInput) {
   await db.runAsync(
     'INSERT OR REPLACE INTO sections (book_id, idx, title, text, needs_ocr) VALUES (?, ?, ?, ?, ?)',
     bookId,
     s.idx,
     s.title,
     s.text,
-    s.needsOcr ? 1 : 0,
+    s.ocr,
   );
+}
+
+// Sections whose text will not change any more, so a resumed job can skip them.
+export async function getFinishedSectionIdxs(db: SQLiteDatabase, bookId: string) {
+  const rows = await db.getAllAsync<{ idx: number }>('SELECT idx FROM sections WHERE book_id = ? AND needs_ocr != 1', bookId);
+  return rows.map((r) => r.idx);
 }
 
 export async function getSection(db: SQLiteDatabase, bookId: string, idx: number): Promise<Section | null> {
@@ -192,7 +237,7 @@ export async function getSection(db: SQLiteDatabase, bookId: string, idx: number
     bookId,
     idx,
   );
-  return r ? { idx: r.idx, title: r.title, text: r.text, needsOcr: r.needs_ocr === 1 } : null;
+  return r ? { idx: r.idx, title: r.title, text: r.text, needsOcr: r.needs_ocr > 0, ocrPending: r.needs_ocr === 1 } : null;
 }
 
 export async function getSectionTitles(db: SQLiteDatabase, bookId: string) {

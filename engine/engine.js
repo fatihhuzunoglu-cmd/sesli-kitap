@@ -97,6 +97,14 @@
   }
 
   // ---------- PDF ----------
+  // Hands pdf.js its image decoders (bundled into the page) instead of letting it fetch them.
+  function BundledData() {}
+  BundledData.prototype.fetch = function (req) {
+    var b64 = req.kind === 'wasmUrl' && globalThis.__pdfWasm && globalThis.__pdfWasm[req.filename];
+    if (!b64) return Promise.reject(new Error('Not bundled: ' + req.filename));
+    return Promise.resolve(b64ToBytes(b64));
+  };
+
   async function extractPdf(job, bytes) {
     var lib = globalThis.pdfjsLib;
     var doc;
@@ -108,6 +116,9 @@
         disableFontFace: true,
         useSystemFonts: false,
         stopAtErrors: false,
+        wasmUrl: 'https://engine.local/pdfjs/',
+        useWorkerFetch: false,
+        BinaryDataFactory: BundledData,
       });
       doc = await task.promise;
     } catch (e) {
@@ -181,16 +192,11 @@
       var text = linesToParagraphs(kept);
       // Only pages that actually draw an image are scans; text-less pages without one are just blank.
       var needsOcr = text.replace(/\s/g, '').length < 20 && !!hasImage[pageNo];
-      post({ type: 'section', jobId: job.id, index: pageNo - 1, title: 'Sayfa ' + pageNo, text: text, needsOcr: needsOcr });
-      if (needsOcr) {
-        job.ocr.push({
-          index: pageNo - 1,
-          title: 'Sayfa ' + pageNo,
-          render: function () {
-            return renderPdfPage(doc, pageNo);
-          },
-        });
-      }
+      emitSection(job, pageNo - 1, 'Sayfa ' + pageNo, text, needsOcr && {
+        render: function () {
+          return renderPdfPage(doc, pageNo);
+        },
+      });
     };
     for (var p = 1; p <= doc.numPages; p++) {
       if (job.cancelled) return;
@@ -253,8 +259,11 @@
     held.forEach(function (h) {
       emit(h.p, h.lines);
     });
-    await runOcr(job);
-    await task.destroy();
+    try {
+      await finishOcr(job);
+    } finally {
+      await task.destroy();
+    }
   }
 
   async function pageHasImage(page) {
@@ -451,28 +460,23 @@
       }
       if (titles[item.href]) lastTitle = titles[item.href];
       var sectionTitle = titles[item.href] || heading || lastTitle || 'Bölüm ' + (i + 1);
-      var needsOcr = res.images > 0 && res.text.replace(/\s/g, '').length < 20;
-      post({ type: 'section', jobId: job.id, index: i, title: sectionTitle, text: res.text, needsOcr: needsOcr });
-      if (needsOcr) {
-        var files = (res.sources || [])
+      var files = [];
+      if (res.images > 0 && res.text.replace(/\s/g, '').length < 20) {
+        files = (res.sources || [])
           .map(function (src) {
             return zip.file(resolvePath(item.href, src.split('#')[0]));
           })
           .filter(Boolean);
-        if (files.length) {
-          job.ocr.push({
-            index: i,
-            title: sectionTitle,
-            images: files.map(function (zf) {
-              return function () {
-                return zf.async('uint8array');
-              };
-            }),
-          });
-        }
       }
+      emitSection(job, i, sectionTitle, res.text, files.length > 0 && {
+        images: files.map(function (zf) {
+          return function () {
+            return zf.async('uint8array');
+          };
+        }),
+      });
     }
-    await runOcr(job);
+    await finishOcr(job);
   }
 
   // ---------- Text decoding ----------
@@ -663,18 +667,63 @@
     }
   }
 
-  // Asks the app first (it may still have to deliver the OCR data); the app answers with engine.ocrStart(jobId, ok).
-  async function runOcr(job) {
-    if (!job.ocr.length || job.cancelled) return;
-    post({ type: 'ocrNeeded', jobId: job.id, count: job.ocr.length });
+  // Posts a section unless the app already has its final text (a resumed job), and queues it for OCR when `ocrItem` is given.
+  function emitSection(job, index, title, text, ocrItem) {
+    if (job.skip[index]) return;
+    post({ type: 'section', jobId: job.id, index: index, title: title, text: text, needsOcr: !!ocrItem });
+    if (!ocrItem) return;
+    ocrItem.index = index;
+    ocrItem.title = title;
+    job.ocr.push(ocrItem);
+    job.ocrTotal++;
+    if (!job.ocrLoop) {
+      job.ocrLoop = ocrLoop(job);
+      // Surfaced by finishOcr; keeps the rejection from being reported as unhandled meanwhile.
+      job.ocrLoop.catch(function () {});
+    } else if (job.ocrWake) {
+      job.ocrWake();
+    }
+  }
+
+  // Pages from the one being read onwards come first, so listening can start while the rest of the book is recognised.
+  function nextOcrItem(job) {
+    var best = -1;
+    for (var i = 0; i < job.ocr.length; i++) {
+      if (best < 0) {
+        best = i;
+        continue;
+      }
+      var idx = job.ocr[i].index;
+      var cur = job.ocr[best].index;
+      var ahead = idx >= job.focus;
+      var curAhead = cur >= job.focus;
+      if ((ahead && !curAhead) || (ahead === curAhead && idx < cur)) best = i;
+    }
+    return best < 0 ? null : job.ocr.splice(best, 1)[0];
+  }
+
+  // Runs alongside extraction. Asks the app first (it may still have to deliver the OCR data);
+  // the app answers with engine.ocrStart(jobId, ok).
+  async function ocrLoop(job) {
+    post({ type: 'ocrNeeded', jobId: job.id, count: job.ocrTotal });
     var ok = await new Promise(function (resolve) {
       job.ocrGate = resolve;
     });
+    job.ocrGate = null;
     if (!ok) return;
     var worker = await getOcrWorker();
-    for (var i = 0; i < job.ocr.length; i++) {
+    var done = 0;
+    for (;;) {
       if (job.cancelled) return;
-      var item = job.ocr[i];
+      var item = nextOcrItem(job);
+      if (!item) {
+        if (job.extracted) return;
+        await new Promise(function (resolve) {
+          job.ocrWake = resolve;
+        });
+        job.ocrWake = null;
+        continue;
+      }
       var texts = [];
       try {
         if (item.render) {
@@ -689,8 +738,15 @@
       }
       var text = texts.filter(Boolean).join('\n');
       post({ type: 'section', jobId: job.id, index: item.index, title: item.title, text: text, needsOcr: !text, ocr: true });
-      post({ type: 'ocrProgress', jobId: job.id, done: i + 1, total: job.ocr.length });
+      done++;
+      post({ type: 'ocrProgress', jobId: job.id, done: done, total: job.ocrTotal });
     }
+  }
+
+  async function finishOcr(job) {
+    job.extracted = true;
+    if (job.ocrWake) job.ocrWake();
+    if (job.ocrLoop) await job.ocrLoop;
   }
 
   async function extractImages(job, bytes) {
@@ -701,10 +757,7 @@
     }
     post({ type: 'meta', jobId: job.id, title: null, author: null, language: null, sectionCount: images.length });
     images.forEach(function (img, n) {
-      post({ type: 'section', jobId: job.id, index: n, title: 'Sayfa ' + (n + 1), text: '', needsOcr: true });
-      job.ocr.push({
-        index: n,
-        title: 'Sayfa ' + (n + 1),
+      emitSection(job, n, 'Sayfa ' + (n + 1), '', {
         images: [
           function () {
             return Promise.resolve(img);
@@ -712,7 +765,7 @@
         ],
       });
     });
-    await runOcr(job);
+    await finishOcr(job);
   }
 
   // ---------- Sections from block elements (DOCX) ----------
@@ -831,8 +884,20 @@
   };
 
   window.engine = {
-    begin: function (jobId, kind) {
-      jobs[jobId] = { id: jobId, kind: kind, parts: [], marks: [], size: 0, ocr: [], ocrGate: null, cancelled: false };
+    // options.skip: section indexes the app already holds final text for (when resuming); options.focus: page being read.
+    begin: function (jobId, kind, options) {
+      var skip = {};
+      ((options && options.skip) || []).forEach(function (i) {
+        skip[i] = true;
+      });
+      jobs[jobId] = {
+        id: jobId, kind: kind, parts: [], marks: [], size: 0, skip: skip, focus: (options && options.focus) || 0,
+        ocr: [], ocrTotal: 0, ocrLoop: null, ocrGate: null, ocrWake: null, extracted: false, cancelled: false,
+      };
+    },
+    focus: function (jobId, index) {
+      var job = jobs[jobId];
+      if (job) job.focus = index;
     },
     // Separates the files of a multi-file job (photo books) inside the byte stream.
     mark: function (jobId) {
@@ -860,6 +925,7 @@
       if (!job) return;
       job.cancelled = true;
       if (job.ocrGate) job.ocrGate(false);
+      if (job.ocrWake) job.ocrWake();
     },
     end: async function (jobId) {
       var job = jobs[jobId];

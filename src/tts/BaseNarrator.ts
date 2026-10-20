@@ -15,6 +15,9 @@ export type NarratorState = {
 };
 export type BookInfo = { id: string; title: string; author: string | null };
 
+// How often to look again for a page that is still being recognised or translated.
+const WAIT_MS = 1000;
+
 export abstract class BaseNarrator {
   protected state: NarratorState = {
     section: null,
@@ -28,6 +31,9 @@ export abstract class BaseNarrator {
   private cache = new Map<number, LoadedSection | null>();
   protected session = 0;
   protected pronunciations: Pronunciation[] = [];
+  // While the book is still being read (OCR) or translated, missing pages are waited for instead of skipped.
+  private processing = false;
+  private waitListeners = new Set<(idx: number) => void>();
 
   constructor(
     protected db: SQLiteDatabase,
@@ -63,6 +69,27 @@ export abstract class BaseNarrator {
     this.pronunciations = list;
   }
 
+  setProcessing(processing: boolean) {
+    this.processing = processing;
+  }
+
+  // Called with the section playback is waiting for, so its OCR or translation can be done first.
+  onWait(l: (idx: number) => void) {
+    this.waitListeners.add(l);
+    return () => {
+      this.waitListeners.delete(l);
+    };
+  }
+
+  // Shows the latest text of the displayed section once its OCR or translation has finished.
+  refresh = async () => {
+    const current = this.state.section;
+    const idx = this.state.position.sectionIdx;
+    if (current && !current.ocrPending) return;
+    const loaded = await this.fetch(idx);
+    if (idx === this.state.position.sectionIdx && loaded !== current) this.set({ section: loaded });
+  };
+
   setSleepAt(at: number | null) {
     this.set({ sleepAt: at });
   }
@@ -82,8 +109,11 @@ export abstract class BaseNarrator {
     if (s) {
       const paragraphs = toParagraphs(s.text);
       loaded = { ...s, paragraphs, sentences: paragraphs.flatMap((p) => p.sentences) };
-      if (this.cache.size > 6) this.cache.delete(this.cache.keys().next().value!);
-      this.cache.set(idx, loaded);
+      // Pages still waiting for OCR change later, so they are always read afresh.
+      if (!s.ocrPending) {
+        if (this.cache.size > 6) this.cache.delete(this.cache.keys().next().value!);
+        this.cache.set(idx, loaded);
+      }
     }
     return loaded;
   }
@@ -103,12 +133,19 @@ export abstract class BaseNarrator {
     return Math.max(0, Math.min(this.sectionCount - 1, idx));
   }
 
-  // First readable sentence at or after pos, skipping empty and scanned sections; null at the end of the book.
-  protected async normalise(pos: Position): Promise<Position | null> {
+  // First readable sentence at or after pos, skipping empty sections; null at the end of the book.
+  // With `session`, sections not ready yet (still in OCR or translation) are waited for until that session ends.
+  protected async normalise(pos: Position, session?: number): Promise<Position | null> {
     let { sectionIdx, sentenceIdx } = pos;
     for (;;) {
-      if (sectionIdx >= this.sectionCount) return null;
-      const s = await this.fetch(sectionIdx);
+      const s = sectionIdx < this.sectionCount ? await this.fetch(sectionIdx) : null;
+      const pending = !s ? this.processing : s.ocrPending && this.processing;
+      if (pending && session !== undefined) {
+        if (session !== this.session) return null;
+        this.waitListeners.forEach((l) => l(sectionIdx));
+        await new Promise((r) => setTimeout(r, WAIT_MS));
+        continue;
+      }
       if (!s) return null;
       if (sentenceIdx < s.sentences.length) return { sectionIdx, sentenceIdx };
       sectionIdx++;

@@ -1,0 +1,57 @@
+appId: com.fatihuzunoglu.seslikitap
+name: Taranmış kitabı (JBIG2/CCITT, JPEG 2000) oku ve Türkçeye çevir
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-url"
+- tapOn:
+    id: "url-input"
+- inputText: "${SERVER}/taranmis-kitap.pdf"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible:
+      text: "%0 · 3 sayfa"
+    timeout: 240000
+- tapOn:
+    id: "book-card"
+- extendedWaitUntil:
+    visible: ".*a wet cat walked in through the door.*"
+    timeout: 30000
+- takeScreenshot: ${OUT}/18-scanned-book
+- tapOn:
+    id: "translate-button"
+- tapOn:
+    id: "translate-to-tr"
+- takeScreenshot: ${OUT}/19-translate-sheet
+- tapOn:
+    id: "translate-start"
+# iOS asks once before downloading a language pack.
+- runFlow:
+    when:
+      visible: "Download|İndir"
+    commands:
+      - tapOn: "Download|İndir"
+- extendedWaitUntil:
+    visible: ".*[Kk]edi.*"
+    timeout: 240000
+- assertNotVisible: ".*a wet cat walked in.*"
+- assertVisible:
+    text: "Sayfa 1/3.*"
+- takeScreenshot: ${OUT}/20-translated-page
+- tapOn:
+    id: "toc-button"
+- tapOn: "Sayfa 3"
+# Page 3 is already Turkish, so it is kept as it is.
+- extendedWaitUntil:
+    visible: ".*kasabanın ışıklarının.*"
+    timeout: 120000
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: ".*\\(Türkçe\\).*"
+    timeout: 30000
+- assertVisible: "ÇEVİRİ"
+- takeScreenshot: ${OUT}/21-library-translation

@@ -3,15 +3,67 @@ import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, TextIn
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { deleteBook, listBooks, type Book } from '@/db/database';
+import { deleteBook, getBook, listBooks, type Book } from '@/db/database';
 import { useExtractor } from '@/engine/ExtractorProvider';
 import { getOcrProgress, useBooksChanged } from '@/engine/booksEvents';
 import * as ImagePicker from 'expo-image-picker';
-import { deleteBookFile, importFromUrl, importPhotos, importText, NOT_YET_SUPPORTED, pickAndImportBooks, SUPPORTED_LABEL } from '@/lib/importBooks';
+import {
+  addPhotosToBook,
+  createTranslation,
+  deleteBookFile,
+  importFromUrl,
+  importPhotos,
+  importText,
+  NOT_YET_SUPPORTED,
+  pickAndImportBooks,
+  SUPPORTED_LABEL,
+} from '@/lib/importBooks';
+import { isPaged } from '@/lib/books';
 import { Sheet } from '@/ui/Sheet';
+import { Translator } from '../../modules/translator';
 import { useTheme, type Theme } from '@/ui/theme';
 
 type AddMode = null | 'menu' | 'url' | 'text';
+type PhotoSource = 'camera' | 'gallery';
+
+const canTranslate = Translator?.isSupported() ?? false;
+
+// Lets the user pick page photos from the gallery, or shoot pages one after another until they tap "Bitti".
+async function pickPhotos(source: PhotoSource): Promise<string[]> {
+  if (source === 'gallery') {
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, orderedSelection: true, quality: 0.9 });
+    return res.canceled ? [] : res.assets.map((a) => a.uri);
+  }
+  const perm = await ImagePicker.requestCameraPermissionsAsync();
+  if (!perm.granted) {
+    Alert.alert('Kamera izni gerekli', 'Sayfaları fotoğraflamak için Ayarlar’dan kamera izni verin.');
+    return [];
+  }
+  const shots: string[] = [];
+  for (;;) {
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.9 });
+    if (res.canceled) break;
+    shots.push(res.assets[0].uri);
+    const more = await new Promise<boolean>((resolve) =>
+      Alert.alert(`${shots.length}. sayfa eklendi`, 'Bir sayfa daha fotoğraflamak ister misiniz?', [
+        { text: 'Bitti', onPress: () => resolve(false) },
+        { text: 'Sonraki sayfa', onPress: () => resolve(true) },
+      ]),
+    );
+    if (!more) break;
+  }
+  return shots;
+}
+
+function askPhotoSource(title: string): Promise<PhotoSource | null> {
+  return new Promise((resolve) =>
+    Alert.alert(title, 'Sayfaları nereden ekleyelim?', [
+      { text: 'Vazgeç', style: 'cancel', onPress: () => resolve(null) },
+      { text: 'Galeri', onPress: () => resolve('gallery') },
+      { text: 'Kamera', onPress: () => resolve('camera') },
+    ]),
+  );
+}
 
 export default function Library() {
   const db = useSQLiteContext();
@@ -27,6 +79,7 @@ export default function Library() {
   const [url, setUrl] = useState('');
   const [pasteTitle, setPasteTitle] = useState('');
   const [pasteText, setPasteText] = useState('');
+  const [actionsFor, setActionsFor] = useState<Book | null>(null);
 
   const refresh = useCallback(() => {
     void listBooks(db).then(setBooks);
@@ -69,38 +122,46 @@ export default function Library() {
 
   const photoTitle = () => `Fotoğraflanan sayfalar ${new Date().toLocaleDateString('tr-TR')}`;
 
-  const addFromGallery = () => {
+  const addFromPhotos = (source: PhotoSource) => {
     setMode(null);
     setTimeout(async () => {
-      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, orderedSelection: true, quality: 0.9 });
-      if (res.canceled || !res.assets.length) return;
-      void run(async () => [await importPhotos(db, res.assets.map((a) => a.uri), photoTitle())]);
+      const uris = await pickPhotos(source);
+      if (uris.length) void run(async () => [await importPhotos(db, uris, photoTitle())]);
     }, 450);
   };
 
-  // Each shot is one page; the user keeps shooting until they tap "Bitti".
-  const addFromCamera = () => {
+  // Foreign-language pages: the photos become one book, which is recognised and translated into Turkish page by page.
+  const translatePhotos = () => {
     setMode(null);
     setTimeout(async () => {
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert('Kamera izni gerekli', 'Sayfaları fotoğraflamak için Ayarlar’dan kamera izni verin.');
-        return;
-      }
-      const shots: string[] = [];
-      for (;;) {
-        const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.9 });
-        if (res.canceled) break;
-        shots.push(res.assets[0].uri);
-        const more = await new Promise<boolean>((resolve) =>
-          Alert.alert(`${shots.length}. sayfa eklendi`, 'Bir sayfa daha fotoğraflamak ister misiniz?', [
-            { text: 'Bitti', onPress: () => resolve(false) },
-            { text: 'Sonraki sayfa', onPress: () => resolve(true) },
-          ]),
-        );
-        if (!more) break;
-      }
-      if (shots.length) void run(async () => [await importPhotos(db, shots, photoTitle())]);
+      const source = await askPhotoSource('Fotoğrafları Türkçeye çevir');
+      if (!source) return;
+      const uris = await pickPhotos(source);
+      if (!uris.length) return;
+      let translationId = '';
+      await run(async () => {
+        const bookId = await importPhotos(db, uris, `Çevrilecek sayfalar ${new Date().toLocaleDateString('tr-TR')}`);
+        translationId = await createTranslation(db, (await getBook(db, bookId))!, 'tr');
+        return [bookId, translationId];
+      });
+      if (translationId) router.push({ pathname: '/reader/[id]', params: { id: translationId } });
+    }, 450);
+  };
+
+  const translate = async (b: Book) => {
+    setActionsFor(null);
+    const id = await createTranslation(db, b, 'tr');
+    enqueue(id);
+    router.push({ pathname: '/reader/[id]', params: { id } });
+  };
+
+  const addPages = (b: Book) => {
+    setActionsFor(null);
+    setTimeout(async () => {
+      const source = await askPhotoSource('Sayfa ekle');
+      if (!source) return;
+      const uris = await pickPhotos(source);
+      if (uris.length) void run(() => addPhotosToBook(db, b, uris));
     }, 450);
   };
 
@@ -128,11 +189,13 @@ export default function Library() {
       ]);
       return;
     }
-    if (b.processedCount === 0) return;
+    // A new translation has no pages yet, but its reader waits for them and starts as soon as one is ready.
+    if (b.processedCount === 0 && b.format !== 'translation') return;
     router.push({ pathname: '/reader/[id]', params: { id: b.id } });
   };
 
   const confirmDelete = (b: Book) => {
+    setActionsFor(null);
     Alert.alert('Kitabı sil', `“${b.title}” kitaplığınızdan ve cihazdan silinsin mi?`, [
       { text: 'Vazgeç', style: 'cancel' },
       {
@@ -207,18 +270,35 @@ export default function Library() {
               ) : null}
             </View>
           }
-          renderItem={({ item }) => <BookCard book={item} theme={t} onPress={() => open(item)} onLongPress={() => confirmDelete(item)} />}
+          renderItem={({ item }) => <BookCard book={item} theme={t} onPress={() => open(item)} onLongPress={() => setActionsFor(item)} />}
         />
       )}
 
       <Sheet visible={mode === 'menu'} title="Kitap ekle" onClose={() => setMode(null)}>
         <View style={{ paddingHorizontal: 16, gap: 8 }}>
           <MenuItem theme={t} icon="document-text-outline" title="Dosyadan" body={SUPPORTED_LABEL} onPress={addFromFiles} testID="add-file" />
-          <MenuItem theme={t} icon="camera-outline" title="Sayfa fotoğrafı çek" body="Basılı kitabın sayfalarını çekin, metin otomatik tanınır" onPress={addFromCamera} testID="add-camera" />
-          <MenuItem theme={t} icon="images-outline" title="Galeriden fotoğraf seç" body="Daha önce çektiğiniz sayfa fotoğraflarını okuyun" onPress={addFromGallery} testID="add-gallery" />
+          <MenuItem theme={t} icon="camera-outline" title="Sayfa fotoğrafı çek" body="Basılı kitabın sayfalarını çekin; kitap haline gelir, metin otomatik tanınır" onPress={() => addFromPhotos('camera')} testID="add-camera" />
+          <MenuItem theme={t} icon="images-outline" title="Galeriden fotoğraf seç" body="Çektiğiniz sayfa fotoğraflarını tek kitapta birleştirin" onPress={() => addFromPhotos('gallery')} testID="add-gallery" />
+          {canTranslate ? (
+            <MenuItem theme={t} icon="language-outline" title="Fotoğrafları Türkçeye çevir" body="Yabancı dildeki sayfaları çekin; kitap yapılıp Türkçeye çevrilir" onPress={translatePhotos} testID="add-translate-photos" />
+          ) : null}
           <MenuItem theme={t} icon="link-outline" title="Bağlantıdan" body="İnternetteki bir kitap dosyasını indirin" onPress={() => setMode('url')} testID="add-url" />
           <MenuItem theme={t} icon="clipboard-outline" title="Metin yapıştır" body="Bir yazıyı, makaleyi ya da notu dinleyin" onPress={() => setMode('text')} testID="add-text" />
         </View>
+      </Sheet>
+
+      <Sheet visible={actionsFor !== null} title={actionsFor?.title ?? ''} onClose={() => setActionsFor(null)}>
+        {actionsFor ? (
+          <View style={{ paddingHorizontal: 16, gap: 8 }}>
+            {canTranslate && actionsFor.format !== 'translation' && !(actionsFor.status === 'ready' && actionsFor.language === 'tr') ? (
+              <MenuItem theme={t} icon="language-outline" title="Türkçeye çevir" body="Çeviri ayrı bir kitap olur; çevrilirken dinleyebilirsiniz" onPress={() => void translate(actionsFor)} testID="action-translate" />
+            ) : null}
+            {actionsFor.format === 'images' ? (
+              <MenuItem theme={t} icon="add-circle-outline" title="Sayfa ekle" body="Bu kitabın sonuna yeni sayfa fotoğrafları ekleyin" onPress={() => addPages(actionsFor)} testID="action-add-pages" />
+            ) : null}
+            <MenuItem theme={t} icon="trash-outline" title="Sil" body="Kitabı kitaplıktan ve cihazdan kaldırır" onPress={() => confirmDelete(actionsFor)} testID="action-delete" />
+          </View>
+        ) : null}
       </Sheet>
 
       <Sheet visible={mode === 'url'} title="Bağlantıdan ekle" onClose={() => setMode(null)} action={{ label: 'İndir', onPress: addFromUrl, disabled: busy }}>
@@ -308,18 +388,20 @@ function MenuItem({ theme, icon, title, body, onPress, testID }: { theme: Theme;
   );
 }
 
-const FORMAT_LABEL: Partial<Record<Book['format'], string>> = { images: 'FOTOĞRAF', mobi: 'KINDLE', docx: 'WORD' };
+const FORMAT_LABEL: Partial<Record<Book['format'], string>> = { images: 'FOTOĞRAF', mobi: 'KINDLE', docx: 'WORD', translation: 'ÇEVİRİ' };
 
 function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Theme; onPress: () => void; onLongPress: () => void }) {
   const s = styles(theme);
   const processing = book.status === 'processing';
-  const unit = book.format === 'pdf' || book.format === 'images' ? 'sayfa' : 'bölüm';
+  const unit = isPaged(book) ? 'sayfa' : 'bölüm';
   const ocr = getOcrProgress(book.id);
   let status: string;
   if (processing) {
     status = ocr
       ? `Metin tanınıyor… ${ocr.done}/${ocr.total} ${unit}`
-      : book.sectionCount
+      : book.format === 'translation'
+        ? `Çevriliyor… ${book.processedCount}/${book.sectionCount} ${unit}`
+        : book.sectionCount
         ? `Hazırlanıyor… ${book.processedCount}/${book.sectionCount} ${unit}`
         : 'Hazırlanıyor…';
   } else if (book.status === 'error') {
@@ -335,7 +417,7 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
       onPress={onPress}
       onLongPress={onLongPress}
       accessibilityRole="button"
-      accessibilityHint="Açmak için dokunun, silmek için basılı tutun"
+      accessibilityHint="Açmak için dokunun; çevirmek, sayfa eklemek ya da silmek için basılı tutun"
       testID="book-card"
     >
       <View style={s.cardTop}>

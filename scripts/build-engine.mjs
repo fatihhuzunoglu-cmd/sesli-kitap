@@ -29,8 +29,13 @@ const mobi = toClassicScript(
   'mobi',
 );
 const engine = toClassicScript(read('engine/engine.js'), 'engine');
+// pdf.js decodes JBIG2 (most scanned books) and JPEG 2000 page images, and ICC colours, with WebAssembly it would normally download.
+const pdfWasm = Object.fromEntries(
+  ['jbig2.wasm', 'openjpeg.wasm', 'qcms_bg.wasm'].map((f) => [f, readFileSync(join(root, 'node_modules/pdfjs-dist/wasm', f)).toString('base64')]),
+);
 
 const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>
+<script>globalThis.__pdfWasm=${JSON.stringify(pdfWasm)};</script>
 <script>${polyfills}</script>
 <script>${jszip}</script>
 <script>${tesseract}</script>

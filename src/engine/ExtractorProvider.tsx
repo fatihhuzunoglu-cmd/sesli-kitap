@@ -6,9 +6,10 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { ENGINE_HTML } from './engineHtml.generated';
 import { bytesToBase64 } from '@/lib/base64';
 import { guessLanguage } from '@/lib/text';
-import { clearSections, getBook, getSampleText, insertSection, updateBook } from '@/db/database';
+import { getBook, getFinishedSectionIdxs, getSampleText, insertSection, listBookIds, updateBook } from '@/db/database';
 import { notifyBooksChanged, setOcrProgress } from './booksEvents';
 import { OCR_ASSETS, ocrAssetUri } from './ocrAssets';
+import { translateBook } from './translateBook';
 
 const CHUNK_BYTES = 384 * 1024;
 
@@ -31,7 +32,12 @@ type BookJob = {
   writes: Promise<unknown>;
 };
 
-type ExtractorApi = { enqueue: (bookId: string) => void };
+type ExtractorApi = {
+  // Reads (or translates) a book, continuing from whatever an earlier, interrupted run already finished.
+  enqueue: (bookId: string) => void;
+  // The section being read: OCR and translation do it and the following ones first.
+  focus: (bookId: string, sectionIdx: number) => void;
+};
 
 function makeDeferred() {
   let resolve!: () => void;
@@ -69,17 +75,20 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
   const ocrLoaded = useRef<Promise<void> | null>(null);
   const queue = useRef<string[]>([]);
   const running = useRef(false);
+  const translations = useRef<string[]>([]);
+  const translating = useRef(false);
+  const focusOf = useRef(new Map<string, number>());
 
   const inject = (js: string) => webRef.current?.injectJavaScript(`${js};true;`);
 
   // Streams files into the engine in acknowledged chunks; resolves when the engine reports the job done.
-  const stream = useCallback((jobId: string, kind: string, files: File[], markEach: boolean) => {
+  const stream = useCallback((jobId: string, kind: string, files: File[], markEach: boolean, options?: object) => {
     const finished = new Promise<void>((resolve, reject) => {
       streams.current.set(jobId, { resolve, reject });
     });
     const send = async () => {
       const id = JSON.stringify(jobId);
-      inject(`window.engine.begin(${id}, ${JSON.stringify(kind)})`);
+      inject(`window.engine.begin(${id}, ${JSON.stringify(kind)}, ${JSON.stringify(options ?? {})})`);
       for (const file of files) {
         if (markEach) inject(`window.engine.mark(${id})`);
         const handle = file.open(FileMode.ReadOnly);
@@ -121,7 +130,6 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
     async (bookId: string) => {
       const book = await getBook(db, bookId);
       if (!book) return;
-      await clearSections(db, bookId);
       await updateBook(db, bookId, { status: 'processing', error: null });
       notifyBooksChanged();
       await ready.current.promise;
@@ -129,7 +137,8 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
       const job: BookJob = { id: `${bookId}-${Date.now()}`, bookId, metaLanguage: null, writes: Promise.resolve() };
       active.current = job;
       try {
-        await stream(job.id, book.format, bookFiles(book.fileUri), book.format === 'images');
+        const options = { skip: await getFinishedSectionIdxs(db, bookId), focus: focusOf.current.get(bookId) ?? 0 };
+        await stream(job.id, book.format, bookFiles(book.fileUri), book.format === 'images', options);
         await job.writes;
         const sample = await getSampleText(db, bookId);
         await updateBook(db, bookId, { status: 'ready', language: guessLanguage(sample, job.metaLanguage) });
@@ -157,12 +166,49 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
     }
   }, [processBook]);
 
+  const focus = useCallback((bookId: string, sectionIdx: number) => {
+    focusOf.current.set(bookId, sectionIdx);
+    const job = active.current;
+    if (job?.bookId === bookId) inject(`window.engine.focus(${JSON.stringify(job.id)}, ${sectionIdx})`);
+  }, []);
+
+  // Translations run beside extraction: they follow their source book page by page while its OCR is still going.
+  const pumpTranslations = useCallback(async () => {
+    if (translating.current) return;
+    translating.current = true;
+    try {
+      while (translations.current.length) {
+        const bookId = translations.current[0];
+        await updateBook(db, bookId, { status: 'processing', error: null });
+        notifyBooksChanged();
+        try {
+          await translateBook(db, bookId, { focusOf: (id) => focusOf.current.get(id) ?? 0, focusSource: focus });
+          await updateBook(db, bookId, { status: 'ready' });
+        } catch (e) {
+          await updateBook(db, bookId, { status: 'error', error: (e as Error).message || 'Çeviri yapılamadı.' });
+        }
+        translations.current.shift();
+        notifyBooksChanged();
+      }
+    } finally {
+      translating.current = false;
+    }
+  }, [db, focus]);
+
   const enqueue = useCallback(
     (bookId: string) => {
-      if (!queue.current.includes(bookId) && active.current?.bookId !== bookId) queue.current.push(bookId);
-      void pump();
+      void getBook(db, bookId).then((book) => {
+        if (!book) return;
+        if (book.format === 'translation') {
+          if (!translations.current.includes(bookId)) translations.current.push(bookId);
+          void pumpTranslations();
+          return;
+        }
+        if (!queue.current.includes(bookId) && active.current?.bookId !== bookId) queue.current.push(bookId);
+        void pump();
+      });
     },
-    [pump],
+    [db, pump, pumpTranslations],
   );
 
   const onMessage = useCallback(
@@ -203,7 +249,8 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
           break;
         case 'section':
           write(async () => {
-            await insertSection(db, job.bookId, { idx: msg.index, title: msg.title, text: msg.text, needsOcr: msg.needsOcr });
+            const ocr = msg.ocr ? (msg.needsOcr ? 2 : 0) : msg.needsOcr ? 1 : 0;
+            await insertSection(db, job.bookId, { idx: msg.index, title: msg.title, text: msg.text, ocr });
             notifyBooksChanged();
           });
           break;
@@ -234,11 +281,12 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
     setWebKey((k) => k + 1);
   }, []);
 
+  // Books still marked as processing were interrupted when the app closed; carry on with them.
   useEffect(() => {
-    void pump();
-  }, [pump]);
+    void listBookIds(db, { status: 'processing' }).then((ids) => ids.forEach(enqueue));
+  }, [db, enqueue]);
 
-  const api = useMemo(() => ({ enqueue }), [enqueue]);
+  const api = useMemo(() => ({ enqueue, focus }), [enqueue, focus]);
 
   return (
     <ExtractorContext.Provider value={api}>

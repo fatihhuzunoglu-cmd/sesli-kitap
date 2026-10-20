@@ -37,9 +37,9 @@ class Engine {
     return new Engine(page);
   }
 
-  async send(jobId, kind, files) {
+  async send(jobId, kind, files, options) {
     const { page } = this;
-    await page.evaluate(([id, k]) => window.engine.begin(id, k), [jobId, kind]);
+    await page.evaluate(([id, k, o]) => window.engine.begin(id, k, o), [jobId, kind, options]);
     for (const buf of files) {
       await page.evaluate((id) => window.engine.mark(id), jobId);
       for (let off = 0; off < buf.length; off += CHUNK) {
@@ -71,9 +71,9 @@ class Engine {
   }
 
   // Extracts a book; OCR is granted only when `ocr` is true, mirroring the app's answer to "ocrNeeded".
-  async extract(kind, files, { ocr = false } = {}) {
+  async extract(kind, files, { ocr = false, ...options } = {}) {
     const jobId = `job${this.n++}`;
-    await this.send(jobId, kind, files);
+    await this.send(jobId, kind, files, options);
     await this.waitFor(jobId, ['done', 'error', 'ocrNeeded']);
     if (await this.page.evaluate((id) => window.__msgs.some((m) => m.jobId === id && m.type === 'ocrNeeded'), jobId)) {
       if (ocr) await this.loadOcr();
@@ -84,6 +84,7 @@ class Engine {
     const sections = new Map();
     for (const m of msgs) if (m.type === 'section') sections.set(m.index, m);
     return {
+      ocrOrder: msgs.filter((m) => m.type === 'section' && m.ocr).map((m) => m.index),
       end: msgs.find((m) => m.type === 'done' || m.type === 'error'),
       meta: msgs.find((m) => m.type === 'meta'),
       sections: [...sections.keys()].sort((a, b) => a - b).map((k) => sections.get(k)),
@@ -147,6 +148,22 @@ for (const [name, launch] of engines) {
     assert.equal(r.end.type, 'done');
     assert.match(r.sections[0].text, /Elif adında meraklı bir kız yaşarmış/);
     assert.match(r.sections[1].text, /kapağında yıldızlar olan mavi bir defter/);
+  });
+
+  // Scanners save pages as CCITT/JBIG2 bilevel or JPEG 2000 images, which pdf.js decodes with bundled WebAssembly.
+  test(`${name}: scanned book with CCITT and JPEG 2000 page images`, async () => {
+    const r = await engine.extract('pdf', [fixture('taranmis-kitap.pdf')], { ocr: true });
+    assert.equal(r.end.type, 'done');
+    assert.match(r.sections[0].text, /a wet cat walked in through the door/);
+    assert.match(r.sections[1].text, /knew her name: Cotton/);
+    assert.match(r.sections[2].text, /kasabanın ışıklarının birer birer yanışını/);
+  });
+
+  test(`${name}: OCR starts at the page being read and skips pages already recognised`, async () => {
+    const r = await engine.extract('pdf', [fixture('taranmis-kitap.pdf')], { ocr: true, focus: 1, skip: [2] });
+    assert.equal(r.end.type, 'done');
+    assert.deepEqual(r.ocrOrder, [1, 0]);
+    assert.deepEqual(r.sections.map((s) => s.index), [0, 1]);
   });
 
   test(`${name}: page photo becomes text`, async () => {

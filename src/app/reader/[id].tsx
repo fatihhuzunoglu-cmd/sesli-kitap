@@ -18,6 +18,9 @@ import {
   type Bookmark,
 } from '@/db/database';
 import { useBooksChanged } from '@/engine/booksEvents';
+import { useExtractor } from '@/engine/ExtractorProvider';
+import { isPaged, TRANSLATION_TARGETS } from '@/lib/books';
+import { createTranslation } from '@/lib/importBooks';
 import { searchBook, type SearchHit } from '@/lib/search';
 import type { Paragraph } from '@/lib/text';
 import { languageLabel } from '@/lib/voices';
@@ -25,6 +28,7 @@ import { useNarrator, usesAudioPipeline } from '@/tts/useNarrator';
 import { updatePrefs, usePrefs, type FontFamily, type ThemeName } from '@/ui/prefs';
 import { Sheet } from '@/ui/Sheet';
 import { fontFor, useTheme, type Theme } from '@/ui/theme';
+import { Translator } from '../../../modules/translator';
 
 const RATE_PRESETS = [0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const SLEEP_MINUTES = [5, 10, 15, 30, 45, 60, 90];
@@ -49,7 +53,9 @@ export default function ReaderScreen() {
   return <Reader book={book} autoplay={autoplay === '1'} />;
 }
 
-type Panel = null | 'toc' | 'speed' | 'sleep' | 'appearance';
+type Panel = null | 'toc' | 'speed' | 'sleep' | 'appearance' | 'translate';
+
+const canTranslate = Translator?.isSupported() ?? false;
 
 function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
   const db = useSQLiteContext();
@@ -61,6 +67,8 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
   const [panel, setPanel] = useState<Panel>(null);
   const [ready, setReady] = useState(false);
   const [bookmarkId, setBookmarkId] = useState<number | null>(null);
+  const extractor = useExtractor();
+  const processing = book.status === 'processing';
 
   const voice = prefs.voices[book.language] ?? null;
   const { narrator, section, position, playing, buffering, sleepAt, sentenceProgress } = useNarrator(
@@ -69,7 +77,15 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
     book.sectionCount,
     { language: book.language, voice, pitch: prefs.pitch, rate: prefs.rate },
     prefs.pronunciations,
+    processing,
   );
+
+  // While pages are still being recognised or translated, the ones being read (or waited for) go first.
+  useEffect(() => {
+    if (processing) extractor.focus(book.id, position.sectionIdx);
+  }, [processing, extractor, book.id, position.sectionIdx]);
+  useEffect(() => narrator.onWait((idx) => extractor.focus(book.id, idx)), [narrator, extractor, book.id]);
+  useBooksChanged(narrator.refresh);
 
   useEffect(() => {
     void getPosition(db, book.id).then(async (pos) => {
@@ -129,9 +145,9 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
     setBookmarkId((await findBookmark(db, book.id, position))?.id ?? null);
   };
 
-  const unit = book.format === 'pdf' || book.format === 'images' ? 'Sayfa' : 'Bölüm';
+  const unit = isPaged(book) ? 'Sayfa' : 'Bölüm';
   const lastSection = book.sectionCount - 1;
-  const canNext = position.sectionIdx < Math.min(lastSection, book.processedCount - 1);
+  const canNext = position.sectionIdx < lastSection;
   const sentenceCount = section?.sentences.length ?? 0;
   const bookProgress = book.sectionCount ? (position.sectionIdx + (sentenceCount ? position.sentenceIdx / sentenceCount : 0)) / book.sectionCount : 0;
   const now = useNow(sleepAt ? 30_000 : 0);
@@ -170,12 +186,14 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
           ListEmptyComponent={
             <Text style={s.notice} testID="empty-section">
               {section === null
-                ? 'Bu bölüm hâlâ hazırlanıyor…'
-                : section.needsOcr && book.status === 'processing'
-                  ? 'Bu sayfanın metni resimden tanınıyor (OCR)… Birazdan okunabilir olacak.'
+                ? book.format === 'translation' && processing
+                  ? 'Bu sayfa çevriliyor… Hazır olunca okunur.'
+                  : 'Bu bölüm hâlâ hazırlanıyor…'
+                : section.ocrPending && processing
+                  ? 'Bu sayfanın metni resimden tanınıyor (OCR)… Hazır olunca okunur.'
                   : section.needsOcr
                     ? 'Bu sayfada okunabilir metin bulunamadı. Sesli okuma bu sayfayı atlar.'
-                  : 'Bu bölüm boş.'}
+                    : 'Bu bölüm boş.'}
             </Text>
           }
           renderItem={({ item, index }) => (
@@ -243,12 +261,16 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
           <Tool theme={t} icon="timer-outline" label={sleepAt ? `${sleepLeft} dk` : 'Uyku'} active={!!sleepAt} onPress={() => setPanel('sleep')} testID="sleep-button" />
           <Tool theme={t} icon={bookmarkId !== null ? 'bookmark' : 'bookmark-outline'} label="Yer imi" active={bookmarkId !== null} onPress={toggleBookmark} testID="bookmark-button" />
           <Tool theme={t} icon="text" label="Görünüm" onPress={() => setPanel('appearance')} testID="appearance-button" />
+          {canTranslate && book.format !== 'translation' ? (
+            <Tool theme={t} icon="language-outline" label="Çevir" onPress={() => setPanel('translate')} testID="translate-button" />
+          ) : null}
         </View>
       </View>
 
       <TocSheet
         visible={panel === 'toc'}
         book={book}
+        processing={processing}
         current={position.sectionIdx}
         theme={t}
         onClose={() => setPanel(null)}
@@ -269,6 +291,19 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
         }}
       />
       <AppearanceSheet visible={panel === 'appearance'} theme={t} onClose={() => setPanel(null)} />
+      <TranslateSheet
+        visible={panel === 'translate'}
+        book={book}
+        theme={t}
+        onClose={() => setPanel(null)}
+        onStart={async (language) => {
+          setPanel(null);
+          narrator.pause();
+          const id = await createTranslation(db, book, language);
+          extractor.enqueue(id);
+          router.push({ pathname: '/reader/[id]', params: { id, autoplay: '1' } });
+        }}
+      />
     </View>
   );
 }
@@ -359,6 +394,43 @@ function Tool({ theme, icon, label, onPress, active, testID }: { theme: Theme; i
         {label}
       </Text>
     </Pressable>
+  );
+}
+
+function TranslateSheet({
+  visible,
+  book,
+  theme,
+  onClose,
+  onStart,
+}: {
+  visible: boolean;
+  book: Book;
+  theme: Theme;
+  onClose: () => void;
+  onStart: (language: string) => void;
+}) {
+  const s = styles(theme);
+  const [target, setTarget] = useState(book.language === 'tr' ? 'en' : 'tr');
+  return (
+    <Sheet visible={visible} title="Kitabı çevir" onClose={onClose} action={{ label: 'Çevir', onPress: () => onStart(target), testID: 'translate-start' }}>
+      <View style={{ paddingHorizontal: 20, gap: 14 }}>
+        <Text style={s.body}>
+          Kitap telefonunuzda {languageLabel(target)} diline çevrilir ve kitaplığa ayrı bir kitap olarak eklenir. Çeviri sürerken
+          dinlemeye başlayabilirsiniz; sayfalar sırayla hazırlanır.
+        </Text>
+        <View style={s.wrapRow}>
+          {TRANSLATION_TARGETS.filter((l) => l !== book.language).map((l) => (
+            <Pressable key={l} onPress={() => setTarget(l)} style={[s.pill, l === target && s.pillActive]} testID={`translate-to-${l}`}>
+              <Text style={[s.pillText, l === target && s.pillTextActive]}>{languageLabel(l)}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={s.small}>
+          İlk çeviride dil paketi indirilir (bir kez, internet gerekir). Sonrasında çeviri internetsiz yapılır ve kitabınız cihazdan çıkmaz.
+        </Text>
+      </View>
+    </Sheet>
   );
 }
 
@@ -488,6 +560,7 @@ type TocTab = 'contents' | 'bookmarks' | 'search';
 function TocSheet({
   visible,
   book,
+  processing,
   current,
   theme,
   onClose,
@@ -495,6 +568,7 @@ function TocSheet({
 }: {
   visible: boolean;
   book: Book;
+  processing: boolean;
   current: number;
   theme: Theme;
   onClose: () => void;
@@ -550,7 +624,7 @@ function TocSheet({
             <Pressable style={[s.row, item.idx === current && { backgroundColor: theme.highlight }]} onPress={() => onPick({ sectionIdx: item.idx, sentenceIdx: 0 })}>
               <Text style={s.rowText} numberOfLines={1}>
                 {item.title}
-                {item.needs_ocr ? '  · metinsiz' : ''}
+                {item.needs_ocr === 1 && processing ? '  · tanınıyor' : item.needs_ocr ? '  · metinsiz' : ''}
               </Text>
             </Pressable>
           )}
@@ -636,6 +710,7 @@ const styles = (t: Theme) =>
     playBtn: { width: 68, height: 68, borderRadius: 34, backgroundColor: t.accent, alignItems: 'center', justifyContent: 'center' },
     toolbar: { flexDirection: 'row', maxWidth: 760, width: '100%', alignSelf: 'center' },
     small: { color: t.muted, fontSize: 13 },
+    body: { color: t.text, fontSize: 15, lineHeight: 21 },
     wrapRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     pill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 18, borderWidth: 1, borderColor: t.border, backgroundColor: t.bg },
     pillActive: { backgroundColor: t.accent, borderColor: t.accent },
