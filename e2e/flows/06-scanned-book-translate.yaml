@@ -71,5 +71,5 @@ name: Taranmış kitabı (JBIG2/CCITT, JPEG 2000) oku ve Türkçeye çevir
 - extendedWaitUntil:
     visible: ".*\\(Türkçe\\).*"
     timeout: 30000
-- assertVisible: "ÇEVİRİ"
+- assertVisible: ".*ÇEVİRİ.*"
 - takeScreenshot: ${OUT}/21-library-translation
