@@ -159,6 +159,22 @@ for (const [name, launch] of engines) {
     assert.match(r.sections[2].text, /kasabanın ışıklarının birer birer yanışını/);
   });
 
+  // Phone WebViews can refuse to start a decoder's WebAssembly; pdf.js then needs the bundled JavaScript builds.
+  test(`${name}: scanned pages still decode when the WebAssembly decoders cannot start`, async () => {
+    const fresh = await Engine.open(browser);
+    try {
+      await fresh.page.evaluate(() => {
+        globalThis.__pdfWasm = {};
+      });
+      const r = await fresh.extract('pdf', [fixture('taranmis-kitap.pdf')], { ocr: true });
+      assert.equal(r.end.type, 'done');
+      assert.match(r.sections[0].text, /a wet cat walked in through the door/);
+      assert.match(r.sections[2].text, /kasabanın ışıklarının birer birer yanışını/);
+    } finally {
+      await fresh.page.close();
+    }
+  });
+
   test(`${name}: OCR starts at the page being read and skips pages already recognised`, async () => {
     const r = await engine.extract('pdf', [fixture('taranmis-kitap.pdf')], { ocr: true, focus: 1, skip: [2] });
     assert.equal(r.end.type, 'done');

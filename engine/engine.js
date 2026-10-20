@@ -767,7 +767,7 @@
       var texts = [];
       try {
         if (item.render) {
-          texts.push(await recognize(worker, await item.render()));
+          texts.push(await recognize(worker, await withTimeout(item.render(), PAGE_RENDER_MS, item.title)));
         } else {
           for (var k = 0; k < item.images.length; k++) {
             texts.push(await recognize(worker, await imageToCanvas(await item.images[k]())));
@@ -783,6 +783,26 @@
       done++;
       post({ type: 'ocrProgress', jobId: job.id, done: done, total: job.ocrTotal });
     }
+  }
+
+  // A page whose image cannot be decoded must not hold up the rest of the book.
+  var PAGE_RENDER_MS = 60000;
+  function withTimeout(promise, ms, what) {
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () {
+        reject(new Error(what + ' took longer than ' + ms / 1000 + ' s'));
+      }, ms);
+      promise.then(
+        function (v) {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        function (e) {
+          clearTimeout(timer);
+          reject(e);
+        },
+      );
+    });
   }
 
   async function finishOcr(job) {

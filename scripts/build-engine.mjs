@@ -19,7 +19,15 @@ function toClassicScript(src, name) {
 // Older Android WebViews (e.g. 113) lack features pdf.js relies on, such as Promise.withResolvers.
 const polyfills = toClassicScript(read('node_modules/core-js-bundle/minified.js'), 'core-js');
 const pdf = toClassicScript(read('node_modules/pdfjs-dist/legacy/build/pdf.min.mjs'), 'pdf');
-const worker = toClassicScript(read('node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs'), 'pdf.worker');
+// If an image decoder's WebAssembly cannot start, pdf.js imports a plain-JavaScript build of it from its wasm URL.
+// That URL does not exist offline (on iOS the import never settles), so the import is routed to bundled copies.
+const workerSrc = read('node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs');
+const fallbackImport = /import\(\s*\/\*webpackIgnore: true\*\/\s*\/\*@vite-ignore\*\/\s*`\$\{WasmImage\.#_\}\$\{this\._noWasmFilename\}`\)/;
+if (!fallbackImport.test(workerSrc)) throw new Error('pdf.worker: fallback decoder import not found');
+const worker = toClassicScript(workerSrc.replace(fallbackImport, 'globalThis.__pdfFallback(this._noWasmFilename)'), 'pdf.worker');
+const pdfFallbacks = Object.fromEntries(
+  ['jbig2_nowasm_fallback.js', 'openjpeg_nowasm_fallback.js'].map((f) => [f, read(join('node_modules/pdfjs-dist/wasm', f))]),
+);
 const jszip = toClassicScript(read('node_modules/jszip/dist/jszip.min.js'), 'jszip');
 const tesseract = toClassicScript(read('node_modules/tesseract.js/dist/tesseract.min.js'), 'tesseract');
 const mammoth = toClassicScript(read('node_modules/mammoth/mammoth.browser.min.js'), 'mammoth');
@@ -35,7 +43,9 @@ const pdfWasm = Object.fromEntries(
 );
 
 const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>
-<script>globalThis.__pdfWasm=${JSON.stringify(pdfWasm)};</script>
+<script>globalThis.__pdfWasm=${JSON.stringify(pdfWasm)};
+globalThis.__pdfFallbackSrc=${JSON.stringify(pdfFallbacks).replace(/<\//g, '<\\/')};
+globalThis.__pdfFallback=function(name){var src=globalThis.__pdfFallbackSrc[name];if(!src)return Promise.reject(new Error('Not bundled: '+name));return import(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));};</script>
 <script>${polyfills}</script>
 <script>${jszip}</script>
 <script>${tesseract}</script>

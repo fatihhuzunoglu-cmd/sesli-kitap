@@ -185,7 +185,9 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
           }}
           ListEmptyComponent={
             <Text style={s.notice} testID="empty-section">
-              {section === null
+              {section === null && book.status === 'error'
+                ? `${book.format === 'translation' ? 'Çeviri yapılamadı' : 'Kitap işlenemedi'}: ${book.error ?? ''}`
+                : section === null
                 ? book.format === 'translation' && processing
                   ? 'Bu sayfa çevriliyor… Hazır olunca okunur.'
                   : 'Bu bölüm hâlâ hazırlanıyor…'

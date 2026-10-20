@@ -88,6 +88,7 @@ jobs:
             adb install -r out/SesliKitap.apk
             adb logcat -G 16M || true
             mkdir -p e2e-out/android
+            nohup sh -c "adb logcat -v time ReactNativeJS:V '*:S' > e2e-out/android/js.log" > /dev/null 2>&1 &
             adb shell settings list secure | grep -i tts || true
             adb shell cmd package list packages | grep -i -E "tts|speech" || true
             # A second attempt absorbs emulator hiccups; the first attempt's report is kept for review.
