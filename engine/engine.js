@@ -676,10 +676,31 @@
     return canvas;
   }
 
+  // Size and share of dark pixels of a page image, to tell a blank render from text that was not recognised.
+  function describeCanvas(canvas) {
+    try {
+      var w = 100;
+      var h = Math.max(1, Math.round((canvas.height / Math.max(1, canvas.width)) * w));
+      var small = document.createElement('canvas');
+      small.width = w;
+      small.height = h;
+      var ctx = small.getContext('2d');
+      ctx.drawImage(canvas, 0, 0, w, h);
+      var px = ctx.getImageData(0, 0, w, h).data;
+      var dark = 0;
+      for (var i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] < 384) dark++;
+      return canvas.width + 'x' + canvas.height + ', ' + Math.round((dark / (w * h)) * 1000) / 10 + '% dark';
+    } catch (e) {
+      return 'unreadable canvas';
+    }
+  }
+
   async function recognize(worker, canvas) {
     try {
       var res = await worker.recognize(canvas);
-      return ocrText(res.data.text || '');
+      var text = ocrText(res.data.text || '');
+      if (!text) console.warn('OCR found no text: ' + describeCanvas(canvas) + ', raw ' + (res.data.text || '').length + ' chars');
+      return text;
     } finally {
       canvas.width = 0;
       canvas.height = 0;
@@ -757,6 +778,7 @@
         texts = [];
       }
       var text = texts.filter(Boolean).join('\n');
+      if (!text) console.warn('No text recognised on ' + item.title);
       post({ type: 'section', jobId: job.id, index: item.index, title: item.title, text: text, needsOcr: !text, ocr: true });
       done++;
       post({ type: 'ocrProgress', jobId: job.id, done: done, total: job.ocrTotal });

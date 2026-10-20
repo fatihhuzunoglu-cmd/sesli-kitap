@@ -13,10 +13,15 @@ name: Taranmış kitabı (JBIG2/CCITT, JPEG 2000) oku ve Türkçeye çevir
 - pressKey: Enter
 - extendedWaitUntil:
     visible:
-      text: "%0 · 3 sayfa"
+      text: "%0 · 3 sayfa.*"
     timeout: 240000
+- takeScreenshot: ${OUT}/18a-scanned-library
 - tapOn:
     id: "book-card"
+- tapOn:
+    id: "toc-button"
+- takeScreenshot: ${OUT}/18b-scanned-toc
+- tapOn: "Sayfa 1"
 - extendedWaitUntil:
     visible: ".*a wet cat walked in through the door.*"
     timeout: 30000
