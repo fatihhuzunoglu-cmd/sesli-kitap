@@ -39,20 +39,33 @@ name: Taranmış kitabı (JBIG2/CCITT, JPEG 2000) oku ve Türkçeye çevir
       visible: "Download|İndir"
     commands:
       - tapOn: "Download|İndir"
-- extendedWaitUntil:
-    visible: ".*[Kk]edi.*"
-    timeout: 240000
-- assertNotVisible: ".*a wet cat walked in.*"
-- assertVisible:
-    text: "Sayfa 1/3.*"
-- takeScreenshot: ${OUT}/20-translated-page
-- tapOn:
-    id: "toc-button"
-- tapOn: "Sayfa 3"
-# Page 3 is already Turkish, so it is kept as it is.
-- extendedWaitUntil:
-    visible: ".*kasabanın ışıklarının.*"
-    timeout: 120000
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - extendedWaitUntil:
+          visible: ".*[Kk]edi.*"
+          timeout: 240000
+      - assertNotVisible: ".*a wet cat walked in.*"
+      - assertVisible:
+          text: "Sayfa 1/3.*"
+      - takeScreenshot: ${OUT}/20-translated-page
+      - tapOn:
+          id: "toc-button"
+      - tapOn: "Sayfa 3"
+      # Page 3 is already Turkish, so it is kept as it is.
+      - extendedWaitUntil:
+          visible: ".*kasabanın ışıklarının.*"
+          timeout: 120000
+# Apple's Translation framework only translates on real devices; the simulator must still get an answer from it.
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - extendedWaitUntil:
+          visible: ".*([Kk]edi|Çeviri yapılamadı).*"
+          timeout: 240000
+      - takeScreenshot: ${OUT}/20-translated-page
 - stopApp
 - launchApp
 - extendedWaitUntil:

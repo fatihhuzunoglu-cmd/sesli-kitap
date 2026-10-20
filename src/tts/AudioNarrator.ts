@@ -11,6 +11,8 @@ const AHEAD = 8;
 const SWITCH_GRACE_MS = 800;
 // A sentence normally renders in well under a second; past this the system TTS service is assumed stuck.
 const SYNTH_TIMEOUT_MS = 20000;
+// How long a play/pause change from outside the app (lock screen, headset) must last before it is followed.
+const EXTERNAL_HOLD_MS = 500;
 
 type Item = { pos: Position; file: File; sectionTitle: string };
 
@@ -26,6 +28,7 @@ export class AudioNarrator extends BaseNarrator {
   private starved = false;
   private atEnd = false;
   private switchedAt = 0;
+  private external: { playing: boolean; since: number } | null = null;
   private lockScreenActive = false;
   private lockScreenTitle = '';
   private dir = new Directory(Paths.cache, 'speech');
@@ -190,9 +193,17 @@ export class AudioNarrator extends BaseNarrator {
     const progress = s.duration > 0 ? Math.min(1, s.currentTime / s.duration) : 0;
     if (Math.abs(progress - this.state.sentenceProgress) > 0.02) patch.sentenceProgress = progress;
     const settled = Date.now() - this.switchedAt > SWITCH_GRACE_MS;
-    if (settled && !this.starved && s.isLoaded && s.playing !== this.state.playing) {
-      // Lock screen, headset or Control Center toggled playback.
-      patch.playing = s.playing;
+    // A file that is just ending briefly reports "not playing" before "finished"; that is not a user's pause.
+    const ending = s.duration > 0 && s.duration - s.currentTime < 0.35;
+    if (settled && !this.starved && !ending && s.isLoaded && s.playing !== this.state.playing) {
+      // Lock screen, headset or Control Center toggled playback; believe it once it has held for a moment.
+      if (this.external?.playing !== s.playing) this.external = { playing: s.playing, since: Date.now() };
+      else if (Date.now() - this.external.since >= EXTERNAL_HOLD_MS) {
+        patch.playing = s.playing;
+        this.external = null;
+      }
+    } else {
+      this.external = null;
     }
     if (Object.keys(patch).length) this.set(patch);
   }
