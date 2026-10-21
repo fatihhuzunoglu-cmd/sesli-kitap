@@ -1,0 +1,66 @@
+appId: com.fatihuzunoglu.seslikitap
+name: Yapay zekâ sesi (OpenAI uyumlu sunucu) bağla ve onunla dinle
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-text"
+- tapOn:
+    id: "paste-title"
+- inputText: "Bulut sesi"
+- tapOn:
+    id: "paste-text"
+- inputText: "Bu metin yapay zeka sesiyle okunur. Ikinci cumle de buluttan gelir."
+- tapOn:
+    id: "paste-submit"
+- extendedWaitUntil:
+    visible:
+      text: "%0 · 1 bölüm.*"
+    timeout: 60000
+- tapOn:
+    id: "book-card"
+- tapOn:
+    id: "voice-button"
+- tapOn:
+    id: "cloud-provider-custom"
+- tapOn:
+    id: "cloud-base-url"
+# The E2E server stands in for an OpenAI-compatible text-to-speech service.
+- inputText: "${SERVER}"
+- pressKey: Enter
+- tapOn:
+    id: "cloud-connect"
+- extendedWaitUntil:
+    visible:
+      id: "cloud-voice-e2e-ses"
+    timeout: 30000
+- tapOn:
+    id: "cloud-voice-e2e-ses"
+- takeScreenshot: ${OUT}/22-cloud-voices
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - swipe:
+          start: "1%, 50%"
+          end: "85%, 50%"
+          duration: 400
+- tapOn:
+    id: "play-button"
+- extendedWaitUntil:
+    visible:
+      text: ".*Cümle 2/2.*"
+    timeout: 60000
+# Had the cloud voice failed, the reader would say so and fall back to the phone's voice.
+- assertNotVisible:
+    id: "narrator-notice"
+- takeScreenshot: ${OUT}/23-cloud-reading
+- tapOn:
+    id: "play-button"

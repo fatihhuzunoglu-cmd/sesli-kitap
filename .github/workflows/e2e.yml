@@ -69,7 +69,7 @@ jobs:
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
       - name: Serve test books
         run: |
-          (cd e2e/fixtures && nohup python3 -m http.server 8000 --bind 0.0.0.0 > /tmp/http.log 2>&1 &)
+          (nohup python3 e2e/test-server.py 8000 > /tmp/http.log 2>&1 &)
           for i in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/masal.txt && exit 0; sleep 1; done
           echo "test book server did not start" && cat /tmp/http.log && exit 1
       - name: Run flows on emulator
@@ -95,6 +95,7 @@ jobs:
             maestro test e2e/flows -e SERVER=http://10.0.2.2:8000 -e OUT=e2e-out/android --format junit --output e2e-out/android/report-first.xml --test-output-dir e2e-out/android/maestro-first               || maestro test e2e/flows -e SERVER=http://10.0.2.2:8000 -e OUT=e2e-out/android --format junit --output e2e-out/android/report.xml --test-output-dir e2e-out/android/maestro               || echo "MAESTRO_FAILED" > e2e-out/android/FAILED
             [ -f e2e-out/android/report.xml ] || cp e2e-out/android/report-first.xml e2e-out/android/report.xml
             adb logcat -d > e2e-out/android/logcat.txt
+            cp /tmp/http.log e2e-out/android/server.log || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -150,7 +151,7 @@ jobs:
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
       - name: Serve test books
         run: |
-          (cd e2e/fixtures && nohup python3 -m http.server 8000 --bind 0.0.0.0 > /tmp/http.log 2>&1 &)
+          (nohup python3 e2e/test-server.py 8000 > /tmp/http.log 2>&1 &)
           for i in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/masal.txt && exit 0; sleep 1; done
           echo "test book server did not start" && cat /tmp/http.log && exit 1
       - name: Run flows on simulator
@@ -161,6 +162,7 @@ jobs:
           maestro --device "$UDID" test e2e/flows -e SERVER=http://127.0.0.1:8000 -e OUT=e2e-out/ios --format junit --output e2e-out/ios/report-first.xml --test-output-dir e2e-out/ios/maestro-first             || maestro --device "$UDID" test e2e/flows -e SERVER=http://127.0.0.1:8000 -e OUT=e2e-out/ios --format junit --output e2e-out/ios/report.xml --test-output-dir e2e-out/ios/maestro             || echo "MAESTRO_FAILED" > e2e-out/ios/FAILED
           [ -f e2e-out/ios/report.xml ] || cp e2e-out/ios/report-first.xml e2e-out/ios/report.xml || true
           xcrun simctl spawn "$UDID" log show --last 20m --style compact --predicate 'process CONTAINS "SesliKitap"' > e2e-out/ios/device.log 2>&1 || true
+          cp /tmp/http.log e2e-out/ios/server.log || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:

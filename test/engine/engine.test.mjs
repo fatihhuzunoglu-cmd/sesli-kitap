@@ -12,6 +12,7 @@ const fixture = (name) => readFileSync(join(root, 'e2e/fixtures', name));
 const generated = readFileSync(join(root, 'src/engine/engineHtml.generated.ts'), 'utf8');
 const HTML = JSON.parse(generated.slice(generated.indexOf('= ') + 2, generated.lastIndexOf(';')));
 const CHUNK = 384 * 1024;
+const RANGE_PIECE = 256 * 1024;
 
 const engines = [
   ['chromium', () => chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {})],
@@ -70,15 +71,51 @@ class Engine {
     this.ocrLoaded = true;
   }
 
+  // Answers a ranged PDF's byte-range requests from `buf` the way the app does, until stop() is called.
+  serveRanges(jobId, buf) {
+    let running = true;
+    const loop = (async () => {
+      while (running) {
+        const reqs = await this.page.evaluate((id) => {
+          const open = window.__msgs.filter((m) => m.jobId === id && m.type === 'range' && !m.served);
+          open.forEach((m) => (m.served = true));
+          return open.map((m) => [m.begin, m.end]);
+        }, jobId);
+        for (const [begin, end] of reqs) {
+          for (let off = begin; off < end; off += RANGE_PIECE) {
+            const piece = buf.subarray(off, Math.min(end, off + RANGE_PIECE)).toString('base64');
+            await this.page.evaluate(([id, o, b]) => window.engine.range(id, o, b), [jobId, off, piece]);
+          }
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    })();
+    return async () => {
+      running = false;
+      await loop;
+    };
+  }
+
   // Extracts a book; OCR is granted only when `ocr` is true, mirroring the app's answer to "ocrNeeded".
-  async extract(kind, files, { ocr = false, ...options } = {}) {
+  // With `ranged`, the PDF is not sent up front but served in the byte ranges the engine asks for.
+  async extract(kind, files, { ocr = false, ranged = false, ...options } = {}) {
     const jobId = `job${this.n++}`;
-    await this.send(jobId, kind, files, options);
-    await this.waitFor(jobId, ['done', 'error', 'ocrNeeded']);
-    if (await this.page.evaluate((id) => window.__msgs.some((m) => m.jobId === id && m.type === 'ocrNeeded'), jobId)) {
-      if (ocr) await this.loadOcr();
-      await this.page.evaluate(([id, ok]) => window.engine.ocrStart(id, ok), [jobId, ocr]);
-      await this.waitFor(jobId, ['done', 'error']);
+    let stop = async () => {};
+    if (ranged) {
+      await this.send(jobId, kind, [], { ...options, length: files[0].length });
+      stop = this.serveRanges(jobId, files[0]);
+    } else {
+      await this.send(jobId, kind, files, options);
+    }
+    try {
+      await this.waitFor(jobId, ['done', 'error', 'ocrNeeded']);
+      if (await this.page.evaluate((id) => window.__msgs.some((m) => m.jobId === id && m.type === 'ocrNeeded'), jobId)) {
+        if (ocr) await this.loadOcr();
+        await this.page.evaluate(([id, ok]) => window.engine.ocrStart(id, ok), [jobId, ocr]);
+        await this.waitFor(jobId, ['done', 'error']);
+      }
+    } finally {
+      await stop();
     }
     const msgs = await this.page.evaluate((id) => window.__msgs.filter((m) => m.jobId === id && m.type !== 'ack'), jobId);
     const sections = new Map();
@@ -173,6 +210,15 @@ for (const [name, launch] of engines) {
     } finally {
       await fresh.page.close();
     }
+  });
+
+  test(`${name}: a PDF read in byte ranges gives the same text`, async () => {
+    const r = await engine.extract('pdf', [fixture('mavi-defter.pdf')], { ranged: true });
+    assert.equal(r.end.type, 'done');
+    assert.equal(r.sections.length, 3);
+    assert.match(r.sections[0].text, /Elif adında meraklı bir kız/);
+    const s = await engine.extract('pdf', [fixture('taranmis-kitap.pdf')], { ranged: true, ocr: true });
+    assert.match(s.sections[2].text, /kasabanın ışıklarının birer birer yanışını/);
   });
 
   test(`${name}: OCR starts at the page being read and skips pages already recognised`, async () => {

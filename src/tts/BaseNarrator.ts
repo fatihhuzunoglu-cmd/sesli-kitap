@@ -12,6 +12,8 @@ export type NarratorState = {
   sleepAt: number | null;
   // Fraction of the current sentence already spoken, used to follow the spoken word.
   sentenceProgress: number;
+  // Something the listener should know, e.g. that the cloud voice is unreachable and the phone's voice took over.
+  notice: string | null;
 };
 export type BookInfo = { id: string; title: string; author: string | null };
 
@@ -26,6 +28,7 @@ export abstract class BaseNarrator {
     buffering: false,
     sleepAt: null,
     sentenceProgress: 0,
+    notice: null,
   };
   private listeners = new Set<() => void>();
   private cache = new Map<number, LoadedSection | null>();

@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { getSetting, setSetting } from '@/db/database';
 import type { Pronunciation } from '@/lib/text';
+import type { CloudProvider } from '@/tts/cloudVoices';
 
 export type ThemeName = 'auto' | 'light' | 'sepia' | 'dark';
 export type FontFamily = 'serif' | 'sans';
@@ -15,6 +16,8 @@ export type Prefs = {
   fontFamily: FontFamily;
   theme: ThemeName;
   pronunciations: Pronunciation[];
+  // Server and model per cloud voice provider (their API keys are kept in the keychain).
+  cloud: Partial<Record<CloudProvider, { baseUrl?: string; model?: string }>>;
 };
 
 const DEFAULTS: Prefs = {
@@ -26,6 +29,7 @@ const DEFAULTS: Prefs = {
   fontFamily: 'serif',
   theme: 'auto',
   pronunciations: [],
+  cloud: {},
 };
 
 let prefs: Prefs = DEFAULTS;

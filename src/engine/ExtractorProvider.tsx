@@ -6,12 +6,15 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { ENGINE_HTML } from './engineHtml.generated';
 import { bytesToBase64 } from '@/lib/base64';
 import { guessLanguage } from '@/lib/text';
-import { getBook, getFinishedSectionIdxs, getSampleText, insertSection, listBookIds, updateBook } from '@/db/database';
+import { getBook, getFinishedSectionIdxs, getSampleText, getSectionTitles, insertSection, listBookIds, updateBook, type Book } from '@/db/database';
+import { nextIndex } from '@/lib/translation';
 import { notifyBooksChanged, setOcrProgress } from './booksEvents';
 import { OCR_ASSETS, ocrAssetUri } from './ocrAssets';
 import { translateBook } from './translateBook';
 
 const CHUNK_BYTES = 384 * 1024;
+// Pieces a ranged PDF's byte-range requests are answered in (the engine's pdf.js chunk size).
+const RANGE_PIECE = 256 * 1024;
 
 type EngineMessage =
   | { type: 'ready' }
@@ -21,6 +24,7 @@ type EngineMessage =
   | { type: 'ocrNeeded'; jobId: string; count: number }
   | { type: 'ocrProgress'; jobId: string; done: number; total: number }
   | { type: 'log'; level: string; message: string }
+  | { type: 'range'; jobId: string; begin: number; end: number }
   | { type: 'done' | 'cancelled'; jobId: string }
   | { type: 'error'; jobId: string; message: string };
 
@@ -31,6 +35,8 @@ type BookJob = {
   bookId: string;
   metaLanguage: string | null;
   writes: Promise<unknown>;
+  // Photo books are recognised one page per job; this is the page the job is for.
+  pageIndex?: number;
 };
 
 type ExtractorApi = {
@@ -79,6 +85,8 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
   const translations = useRef<string[]>([]);
   const translating = useRef(false);
   const focusOf = useRef(new Map<string, number>());
+  // File of each ranged PDF job, read from whenever the engine asks for bytes.
+  const rangeFiles = useRef(new Map<string, { file: File; pending: Promise<void> }>());
 
   const inject = (js: string) => webRef.current?.injectJavaScript(`${js};true;`);
 
@@ -127,6 +135,74 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
     return ocrLoaded.current;
   }, [stream]);
 
+  // Answers the engine's byte-range requests for a ranged PDF, one piece at a time and in order.
+  const serveRange = useCallback((jobId: string, begin: number, end: number) => {
+    const entry = rangeFiles.current.get(jobId);
+    if (!entry) return;
+    entry.pending = entry.pending.then(async () => {
+      const handle = entry.file.open(FileMode.ReadOnly);
+      try {
+        for (let off = begin; off < end; off += RANGE_PIECE) {
+          const s = streams.current.get(jobId);
+          if (!s) return;
+          handle.offset = off;
+          const bytes = await handle.readBytes(Math.min(RANGE_PIECE, end - off));
+          const acked = new Promise<void>((r) => (s.onAck = r));
+          inject(`window.engine.range(${JSON.stringify(jobId)}, ${off}, "${bytesToBase64(bytes)}")`);
+          await acked;
+        }
+      } finally {
+        handle.close();
+      }
+    });
+    entry.pending.catch((e) => streams.current.get(jobId)?.reject(e as Error));
+  }, []);
+
+  // A PDF is not copied into the engine whole: the engine opens it by size and asks for the byte ranges it needs,
+  // which keeps memory flat for books of hundreds of pages.
+  const streamPdf = useCallback((jobId: string, file: File, options: object) => {
+    const finished = new Promise<void>((resolve, reject) => {
+      streams.current.set(jobId, { resolve, reject });
+    });
+    rangeFiles.current.set(jobId, { file, pending: Promise.resolve() });
+    const id = JSON.stringify(jobId);
+    inject(`window.engine.begin(${id}, "pdf", ${JSON.stringify({ ...options, length: file.size ?? 0 })})`);
+    inject(`window.engine.end(${id})`);
+    return finished.finally(() => {
+      streams.current.delete(jobId);
+      rangeFiles.current.delete(jobId);
+    });
+  }, []);
+
+  // Photo books are recognised page by page, nearest to the page being read first, so a book of hundreds of
+  // photos never has to be held in the engine at once and an interrupted run continues with the pages left.
+  const processPhotos = useCallback(
+    async (book: Book) => {
+      const files = bookFiles(book.fileUri);
+      const present = new Set((await getSectionTitles(db, book.id)).map((r) => r.idx));
+      for (let i = 0; i < files.length; i++) {
+        if (!present.has(i)) await insertSection(db, book.id, { idx: i, title: `Sayfa ${i + 1}`, text: '', ocr: 1 });
+      }
+      await updateBook(db, book.id, { section_count: files.length });
+      notifyBooksChanged();
+      const done = new Set(await getFinishedSectionIdxs(db, book.id));
+      const total = files.length - done.size;
+      let recognised = 0;
+      setOcrProgress(book.id, { done: 0, total });
+      for (;;) {
+        const idx = nextIndex(files.length, done, focusOf.current.get(book.id) ?? 0);
+        if (idx === null || !(await getBook(db, book.id))) return;
+        const job: BookJob = { id: `${book.id}-${idx}-${Date.now()}`, bookId: book.id, metaLanguage: null, writes: Promise.resolve(), pageIndex: idx };
+        active.current = job;
+        await stream(job.id, 'images', [files[idx]], true);
+        await job.writes;
+        done.add(idx);
+        setOcrProgress(book.id, { done: ++recognised, total });
+      }
+    },
+    [db, stream],
+  );
+
   const processBook = useCallback(
     async (bookId: string) => {
       const book = await getBook(db, bookId);
@@ -139,7 +215,10 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
       active.current = job;
       try {
         const options = { skip: await getFinishedSectionIdxs(db, bookId), focus: focusOf.current.get(bookId) ?? 0 };
-        await stream(job.id, book.format, bookFiles(book.fileUri), book.format === 'images', options);
+        if (book.format === 'images') await processPhotos(book);
+        else if (book.format === 'pdf') await streamPdf(job.id, new File(book.fileUri), options);
+        else await stream(job.id, book.format, bookFiles(book.fileUri), false, options);
+        active.current = job;
         await job.writes;
         const sample = await getSampleText(db, bookId);
         await updateBook(db, bookId, { status: 'ready', language: guessLanguage(sample, job.metaLanguage) });
@@ -152,7 +231,7 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
         notifyBooksChanged();
       }
     },
-    [db, stream],
+    [db, stream, streamPdf, processPhotos],
   );
 
   const pump = useCallback(async () => {
@@ -236,8 +315,28 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
         s?.reject(new Error(msg.message));
         return;
       }
+      if (msg.type === 'range') {
+        serveRange(msg.jobId, msg.begin, msg.end);
+        return;
+      }
       const job = active.current;
       if (!job || msg.jobId !== job.id) return;
+      // A photo-page job only contributes its recognised text, filed under the page it was started for.
+      if (job.pageIndex !== undefined) {
+        if (msg.type === 'section' && msg.ocr) {
+          const idx = job.pageIndex;
+          job.writes = job.writes.then(async () => {
+            await insertSection(db, job.bookId, { idx, title: `Sayfa ${idx + 1}`, text: msg.text, ocr: msg.needsOcr ? 2 : 0 });
+            notifyBooksChanged();
+          });
+        } else if (msg.type === 'ocrNeeded') {
+          void loadOcr().then(
+            () => inject(`window.engine.ocrStart(${JSON.stringify(job.id)}, true)`),
+            () => inject(`window.engine.ocrStart(${JSON.stringify(job.id)}, false)`),
+          );
+        }
+        return;
+      }
       const write = (fn: () => Promise<unknown>) => {
         job.writes = job.writes.then(fn);
       };
@@ -272,7 +371,7 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
           break;
       }
     },
-    [db, loadOcr],
+    [db, loadOcr, serveRange],
   );
 
   const onCrash = useCallback(() => {

@@ -1,9 +1,11 @@
 import { createAudioPlayer, type AudioPlayer, type AudioStatus } from 'expo-audio';
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File, FileMode, Paths } from 'expo-file-system';
 import type { Position } from '@/db/database';
 import { speechLocale } from '@/lib/text';
 import { SpeechFile } from '../../modules/speech-file';
 import { BaseNarrator } from './BaseNarrator';
+import { cloudSettings } from './cloudSettings';
+import { parseCloudVoice, synthesizeCloud } from './cloudVoices';
 
 // Sentences rendered ahead of the one playing, so the next file is always ready the moment one ends.
 const AHEAD = 8;
@@ -11,6 +13,9 @@ const AHEAD = 8;
 const SWITCH_GRACE_MS = 800;
 // A sentence normally renders in well under a second; past this the system TTS service is assumed stuck.
 const SYNTH_TIMEOUT_MS = 20000;
+// A cloud voice that does not answer in time is skipped for this long, reading on with the phone's own voice.
+const CLOUD_TIMEOUT_MS = 30000;
+const CLOUD_RETRY_AFTER_MS = 60000;
 // How long a play/pause change from outside the app (lock screen, headset) must last before it is followed.
 const EXTERNAL_HOLD_MS = 500;
 
@@ -29,6 +34,7 @@ export class AudioNarrator extends BaseNarrator {
   private atEnd = false;
   private switchedAt = 0;
   private external: { playing: boolean; since: number } | null = null;
+  private cloudDownUntil = 0;
   private lockScreenActive = false;
   private lockScreenTitle = '';
   private dir = new Directory(Paths.cache, 'speech');
@@ -75,6 +81,12 @@ export class AudioNarrator extends BaseNarrator {
     this.player?.setPlaybackRate(rate, 'high');
   }
 
+  setVoice(v: Parameters<BaseNarrator['setVoice']>[0]) {
+    // A newly chosen voice gets a fresh chance even if the previous cloud voice was failing.
+    if (v.voice !== this.voice.voice) this.cloudDownUntil = 0;
+    super.setVoice(v);
+  }
+
   dispose() {
     this.halt();
     if (this.player) {
@@ -118,16 +130,12 @@ export class AudioNarrator extends BaseNarrator {
         }
         const section = (await this.fetch(pos.sectionIdx))!;
         this.cursor = { sectionIdx: pos.sectionIdx, sentenceIdx: pos.sentenceIdx + 1 };
-        const file = new File(this.dir, `${session}-${pos.sectionIdx}-${pos.sentenceIdx}.${SpeechFile!.fileExtension}`);
-        const written = await this.render(this.spoken(section.sentences[pos.sentenceIdx]), file);
+        const file = await this.render(this.spoken(section.sentences[pos.sentenceIdx]), `${session}-${pos.sectionIdx}-${pos.sentenceIdx}`);
         if (session !== this.session) {
-          safeDelete(file);
+          if (file) safeDelete(file);
           return;
         }
-        if (!written) {
-          safeDelete(file);
-          continue;
-        }
+        if (!file) continue;
         this.queue.push({ pos, file, sectionTitle: section.title });
         if (this.starved) this.advance();
       }
@@ -137,18 +145,39 @@ export class AudioNarrator extends BaseNarrator {
     if (session === this.session && this.atEnd && this.starved && !this.queue.length) this.finish();
   }
 
-  // Renders one sentence; if the TTS service hangs or dies, restarts it and tries once more before skipping.
-  private async render(text: string, file: File): Promise<boolean> {
-    const options = { voiceId: this.voice.voice, language: speechLocale(this.voice.language), pitch: this.voice.pitch };
+  // Renders one sentence to an audio file named `name` (plus extension); null when it could not be spoken.
+  private async render(text: string, name: string): Promise<File | null> {
+    const cloud = parseCloudVoice(this.voice.voice);
+    if (cloud && Date.now() >= this.cloudDownUntil) {
+      let file: File | null = null;
+      try {
+        const settings = await cloudSettings(cloud.provider);
+        const audio = await withTimeout(synthesizeCloud(settings, cloud.voiceId, text, speechLocale(this.voice.language)), CLOUD_TIMEOUT_MS);
+        file = new File(this.dir, `${name}.${audio.ext}`);
+        await writeBytes(file, audio.bytes);
+        if (this.state.notice) this.set({ notice: null });
+        return file;
+      } catch (e) {
+        if (file) safeDelete(file);
+        this.cloudDownUntil = Date.now() + CLOUD_RETRY_AFTER_MS;
+        const reason = e instanceof Error && e.message !== 'timeout' ? e.message : 'Yanıt gelmedi.';
+        this.set({ notice: `Yapay zekâ sesine ulaşılamadı (${reason}) Telefonun sesiyle devam ediliyor.` });
+      }
+    }
+    // The phone's own voice: the chosen one, or the language's default while a cloud voice is unavailable.
+    const file = new File(this.dir, `${name}.${SpeechFile!.fileExtension}`);
+    const options = { voiceId: cloud ? null : this.voice.voice, language: speechLocale(this.voice.language), pitch: this.voice.pitch };
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const res = await withTimeout(SpeechFile!.synthesize(text, file.uri, options), SYNTH_TIMEOUT_MS);
-        return res.written;
+        if (res.written) return file;
+        break;
       } catch {
         await SpeechFile!.reset().catch(() => {});
       }
     }
-    return false;
+    safeDelete(file);
+    return null;
   }
 
   private advance() {
@@ -247,6 +276,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 function samePos(a: Position, b: Position) {
   return a.sectionIdx === b.sectionIdx && a.sentenceIdx === b.sentenceIdx;
+}
+
+async function writeBytes(file: File, bytes: Uint8Array) {
+  file.create({ overwrite: true });
+  const handle = file.open(FileMode.ReadWrite);
+  try {
+    await handle.writeBytes(bytes);
+  } finally {
+    handle.close();
+  }
 }
 
 function safeDelete(file: File) {

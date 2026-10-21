@@ -71,7 +71,7 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
   const processing = book.status === 'processing';
 
   const voice = prefs.voices[book.language] ?? null;
-  const { narrator, section, position, playing, buffering, sleepAt, sentenceProgress } = useNarrator(
+  const { narrator, section, position, playing, buffering, sleepAt, sentenceProgress, notice } = useNarrator(
     db,
     { id: book.id, title: book.title, author: book.author },
     book.sectionCount,
@@ -212,6 +212,11 @@ function Reader({ book, autoplay }: { book: Book; autoplay: boolean }) {
       )}
 
       <View style={[s.controls, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+        {notice ? (
+          <Text style={s.noticeBar} testID="narrator-notice">
+            {notice}
+          </Text>
+        ) : null}
         <View style={s.progressRow}>
           <Pressable onPress={() => narrator.goToSection(position.sectionIdx - 1)} disabled={position.sectionIdx === 0} hitSlop={10} accessibilityLabel={`Önceki ${unit.toLowerCase()}`} testID="prev-section">
             <Ionicons name="chevron-back" size={22} color={position.sectionIdx === 0 ? t.border : t.accent} />
@@ -713,6 +718,7 @@ const styles = (t: Theme) =>
     toolbar: { flexDirection: 'row', maxWidth: 760, width: '100%', alignSelf: 'center' },
     small: { color: t.muted, fontSize: 13 },
     body: { color: t.text, fontSize: 15, lineHeight: 21 },
+    noticeBar: { color: t.danger, fontSize: 13, lineHeight: 18, textAlign: 'center', maxWidth: 760, alignSelf: 'center' },
     wrapRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     pill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 18, borderWidth: 1, borderColor: t.border, backgroundColor: t.bg },
     pillActive: { backgroundColor: t.accent, borderColor: t.accent },

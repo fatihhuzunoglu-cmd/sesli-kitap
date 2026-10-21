@@ -10,6 +10,7 @@ import { updateBook } from '@/db/database';
 import { notifyBooksChanged } from '@/engine/booksEvents';
 import { speechLocale } from '@/lib/text';
 import { LANGUAGES, loadVoices, QUALITY_LABEL, SAMPLE_TEXT, voicesFor, type VoiceEntry } from '@/lib/voices';
+import { CloudVoicesPanel } from '@/ui/CloudVoicesPanel';
 import { updatePrefs, usePrefs } from '@/ui/prefs';
 import { useTheme, type Theme } from '@/ui/theme';
 
@@ -107,6 +108,8 @@ export default function VoicesScreen() {
               ))}
             </ScrollView>
 
+            <CloudVoicesPanel key={language} theme={t} language={language} onChosen={() => void Speech.stop()} />
+
             <Text style={s.label}>Ses tonu · {prefs.pitch.toFixed(2)}</Text>
             <View style={s.sliderRow}>
               <Text style={s.small}>Kalın</Text>
@@ -131,7 +134,7 @@ export default function VoicesScreen() {
               <Text style={s.link}>Tonu sıfırla</Text>
             </Pressable>
 
-            <Text style={s.label}>Ses seçin (dokununca dinlersiniz)</Text>
+            <Text style={s.label}>Telefonun sesleri (internetsiz · dokununca dinlersiniz)</Text>
             <VoiceRow
               theme={t}
               title="Sistem varsayılanı"

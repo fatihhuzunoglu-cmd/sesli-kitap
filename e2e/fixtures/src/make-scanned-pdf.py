@@ -1,6 +1,7 @@
 """Builds taranmis-kitap.pdf: a scanned-style PDF whose pages are images compressed the way book scanners save them
 (CCITT G4 and JBIG2-class bilevel decoding goes through pdf.js's jbig2.wasm; the last page is JPEG 2000 / openjpeg.wasm).
-Usage: python make-scanned-pdf.py <font.ttf> <out.pdf>"""
+Usage: python make-scanned-pdf.py <font.ttf> <out.pdf> [pages]
+With [pages], builds a long book instead (every page CCITT G4, each saying its own page number) for capacity tests."""
 import io
 import sys
 import textwrap
@@ -8,6 +9,7 @@ import textwrap
 from PIL import Image, ImageDraw, ImageFont
 
 FONT, OUT = sys.argv[1], sys.argv[2]
+LONG = int(sys.argv[3]) if len(sys.argv) > 3 else 0
 W, H = 1240, 1754  # A5-ish at 200 dpi
 
 PAGES = [
@@ -20,15 +22,18 @@ PAGES = [
 ]
 
 
+FONTS = {size: ImageFont.truetype(FONT, size) for size in (40, 46, 64)}
+
+
 def render(title, body):
     img = Image.new('L', (W, H), 255)
     d = ImageDraw.Draw(img)
-    d.text((110, 160), title, font=ImageFont.truetype(FONT, 64), fill=0)
+    d.text((110, 160), title, font=FONTS[64], fill=0)
     y = 300
     for line in textwrap.wrap(body, 38):
-        d.text((110, y), line, font=ImageFont.truetype(FONT, 46), fill=0)
+        d.text((110, y), line, font=FONTS[46], fill=0)
         y += 70
-    d.text((W // 2 - 20, H - 140), str(len(objs) // 3 + 1), font=ImageFont.truetype(FONT, 40), fill=0)
+    d.text((W // 2 - 20, H - 140), str(len(objs) // 3 + 1), font=FONTS[40], fill=0)
     return img
 
 
@@ -48,6 +53,10 @@ def jpx(img):
     img.save(buf, 'JPEG2000', quality_mode='rates', quality_layers=[20])
     return buf.getvalue(), f'/Width {W} /Height {H} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode'
 
+
+if LONG:
+    PAGES = [('g4', f'Bölüm {n}', f'Bu uzun kitabın {n}. sayfasıdır. Sayfa numarası {n} olarak okunmalı ve '
+              'sesli okuma bu sayfayı kaldığı yerden devam ettirebilmeli.') for n in range(1, LONG + 1)]
 
 objs = []  # (dict, stream)
 for kind, title, body in PAGES:

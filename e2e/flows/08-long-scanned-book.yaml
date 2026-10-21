@@ -1,0 +1,43 @@
+appId: com.fatihuzunoglu.seslikitap
+name: 400 sayfalık taranmış kitap, ortasından okumaya başla
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-url"
+- tapOn:
+    id: "url-input"
+- inputText: "${SERVER}/uzun-kitap.pdf"
+- pressKey: Enter
+# Pages become readable while the rest of the book is still being recognised.
+- extendedWaitUntil:
+    visible: ".*(Okunabilir|Metin tanınıyor).*"
+    timeout: 120000
+- takeScreenshot: ${OUT}/24-long-book-library
+- tapOn:
+    id: "book-card"
+- tapOn:
+    id: "toc-button"
+- scrollUntilVisible:
+    element:
+      text: "Sayfa 300( .*)?"
+    direction: DOWN
+    timeout: 120000
+- tapOn: "Sayfa 300( .*)?"
+# OCR jumps to the page being read instead of working through the 299 before it.
+- extendedWaitUntil:
+    visible: ".*kitabın 300\\. sayfasıdır.*"
+    timeout: 180000
+- assertVisible:
+    text: "Sayfa 300/400.*"
+- takeScreenshot: ${OUT}/25-long-book-page-300
+- tapOn:
+    id: "play-button"
+- extendedWaitUntil:
+    visible:
+      text: ".*Cümle 2/.*"
+    timeout: 90000
+- tapOn:
+    id: "play-button"

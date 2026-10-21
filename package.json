@@ -1,6 +1,6 @@
 {
   "name": "sesli-kitap",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -17,6 +17,7 @@
     "expo-keep-awake": "~58.0.3",
     "expo-linking": "~58.0.13",
     "expo-router": "~58.0.23",
+    "expo-secure-store": "~58.0.2",
     "expo-speech": "~58.0.3",
     "expo-splash-screen": "~58.0.10",
     "expo-sqlite": "~58.0.13",

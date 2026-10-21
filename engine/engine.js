@@ -121,13 +121,15 @@
     return Promise.resolve(b64ToBytes(b64));
   };
 
+  // Size of the pieces a ranged PDF is fetched in; the app answers each request in pieces of this size.
+  var RANGE_CHUNK = 256 * 1024;
+
   async function extractPdf(job, bytes) {
     var lib = globalThis.pdfjsLib;
     var doc;
     var task;
     try {
-      task = lib.getDocument({
-        data: bytes,
+      var source = {
         isEvalSupported: false,
         disableFontFace: true,
         useSystemFonts: false,
@@ -135,7 +137,23 @@
         wasmUrl: 'https://engine.local/pdfjs/',
         useWorkerFetch: false,
         BinaryDataFactory: BundledData,
-      });
+      };
+      if (job.length) {
+        // Large books are not copied into the page whole: pdf.js asks the app for the byte ranges it needs.
+        var transport = new lib.PDFDataRangeTransport(job.length, null);
+        transport.requestDataRange = function (begin, end) {
+          post({ type: 'range', jobId: job.id, begin: begin, end: end });
+        };
+        job.transport = transport;
+        source.range = transport;
+        source.length = job.length;
+        source.rangeChunkSize = RANGE_CHUNK;
+        source.disableAutoFetch = true;
+        source.disableStream = true;
+      } else {
+        source.data = bytes;
+      }
+      task = lib.getDocument(source);
       doc = await task.promise;
     } catch (e) {
       if (e && e.name === 'PasswordException') throw new Error('Şifreli PDF dosyaları henüz desteklenmiyor.');
@@ -214,7 +232,10 @@
         },
       });
     };
-    for (var p = 1; p <= doc.numPages; p++) {
+    // Pages are read from the one being listened to onwards (then the ones before it), so its OCR can start at once.
+    var first = Math.min(Math.max(0, job.focus), doc.numPages - 1);
+    for (var k = 0; k < doc.numPages; k++) {
+      var p = ((first + k) % doc.numPages) + 1;
       if (job.cancelled) return;
       var lines = [];
       try {
@@ -245,7 +266,9 @@
         var rawChars = lines.reduce(function (n, l) {
           return n + l.text.replace(/\s/g, '').length;
         }, 0);
-        if (rawChars < 200) hasImage[p] = await pageHasImage(page);
+        // A page without any text is a scan (or blank, which OCR settles quickly); decoding its image just to check is costly.
+        if (rawChars === 0) hasImage[p] = true;
+        else if (rawChars < 200) hasImage[p] = await pageHasImage(page);
         page.cleanup();
       } catch (e) {
         lines = [];
@@ -260,9 +283,9 @@
           counts[edges[i] + k] = (counts[edges[i] + k] || 0) + 1;
         }
       });
-      if (p <= warmup) {
+      if (k < warmup) {
         held.push({ p: p, lines: lines });
-        if (p === warmup) {
+        if (k === warmup - 1) {
           held.forEach(function (h) {
             emit(h.p, h.lines);
           });
@@ -954,8 +977,15 @@
       });
       jobs[jobId] = {
         id: jobId, kind: kind, parts: [], marks: [], size: 0, skip: skip, focus: (options && options.focus) || 0,
+        length: (options && options.length) || 0, transport: null,
         ocr: [], ocrTotal: 0, ocrLoop: null, ocrGate: null, ocrWake: null, extracted: false, cancelled: false,
       };
+    },
+    // Bytes of a ranged PDF that pdf.js asked for with a 'range' message.
+    range: function (jobId, begin, b64) {
+      var job = jobs[jobId];
+      if (job && job.transport) job.transport.onDataRange(begin, b64ToBytes(b64));
+      post({ type: 'ack', jobId: jobId });
     },
     focus: function (jobId, index) {
       var job = jobs[jobId];
