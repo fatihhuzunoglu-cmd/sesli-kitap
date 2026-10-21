@@ -38,6 +38,9 @@ jobs:
 
   android:
     runs-on: ubuntu-latest
+    # The whole build is an E2E build: native settings at prebuild, and the JS bundle's app config (stand-in catalog).
+    env:
+      E2E: '1'
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
@@ -127,6 +130,9 @@ jobs:
 
   ios:
     runs-on: macos-latest
+    # The whole build is an E2E build: native settings at prebuild, and the JS bundle's app config (stand-in catalog).
+    env:
+      E2E: '1'
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
