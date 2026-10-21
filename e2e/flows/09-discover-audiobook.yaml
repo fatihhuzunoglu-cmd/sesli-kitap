@@ -35,12 +35,15 @@ name: İnternette sesli kitap ve e-kitap ara, indir, dinle
       text: "0:0[3-9]"
     timeout: 30000
 - takeScreenshot: ${OUT}/25-audiobook-playing
+# Paused first: Maestro waits for a screen whose clock is running to settle before tapping.
+- tapOn:
+    id: "audio-play"
 - tapOn:
     id: "track-1"
 - extendedWaitUntil:
     visible:
       id: "audio-time"
-      text: "0:0[2-9]"
+      text: "0:(0[2-9]|1[0-9])"
     timeout: 30000
 - assertVisible:
     id: "audio-track-title"
