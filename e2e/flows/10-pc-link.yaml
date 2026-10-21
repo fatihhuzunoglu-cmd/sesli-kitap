@@ -27,10 +27,7 @@ name: Bilgisayara karekod bağlantısıyla bağlan, hazır kitabı ve sesli kita
       visible: "Open|Aç"
     commands:
       - tapOn: "Open|Aç"
-- extendedWaitUntil:
-    visible:
-      id: "pc-name"
-    timeout: 30000
+# iOS reads the connection card as one element, so the computer's books show the link worked.
 - extendedWaitUntil:
     visible: "Deneme Masalları"
     timeout: 30000

@@ -158,10 +158,12 @@ export default function PcScreen() {
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <Ionicons name={error ? 'alert-circle-outline' : 'desktop'} size={28} color={error ? t.danger : t.accent} />
               <View style={{ flex: 1 }}>
-                <Text style={s.h2} testID="pc-name">
+                <Text style={s.h2} numberOfLines={1} testID="pc-name">
                   {pcName ?? link.name ?? 'Bilgisayar'}
                 </Text>
-                <Text style={s.small}>{link.url}</Text>
+                <Text style={s.small} numberOfLines={1}>
+                  {link.url}
+                </Text>
               </View>
               <Pressable onPress={refresh} hitSlop={10} accessibilityLabel="Yenile" testID="pc-refresh">
                 {loading ? <ActivityIndicator color={t.accent} /> : <Ionicons name="refresh" size={24} color={t.accent} />}
