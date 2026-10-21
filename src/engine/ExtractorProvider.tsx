@@ -148,7 +148,7 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
           handle.offset = off;
           const bytes = await handle.readBytes(Math.min(RANGE_PIECE, end - off));
           const acked = new Promise<void>((r) => (s.onAck = r));
-          inject(`window.engine.range(${JSON.stringify(jobId)}, ${off}, "${bytesToBase64(bytes)}")`);
+          inject(`window.engine.range(${JSON.stringify(jobId)}, ${begin}, ${end}, ${off}, "${bytesToBase64(bytes)}")`);
           await acked;
         }
       } finally {

@@ -12,7 +12,8 @@ const fixture = (name) => readFileSync(join(root, 'e2e/fixtures', name));
 const generated = readFileSync(join(root, 'src/engine/engineHtml.generated.ts'), 'utf8');
 const HTML = JSON.parse(generated.slice(generated.indexOf('= ') + 2, generated.lastIndexOf(';')));
 const CHUNK = 384 * 1024;
-const RANGE_PIECE = 256 * 1024;
+// Smaller than the engine's 256 KB chunks, so every range request arrives in several pieces as it does from the app.
+const RANGE_PIECE = 64 * 1024;
 
 const engines = [
   ['chromium', () => chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {})],
@@ -84,7 +85,7 @@ class Engine {
         for (const [begin, end] of reqs) {
           for (let off = begin; off < end; off += RANGE_PIECE) {
             const piece = buf.subarray(off, Math.min(end, off + RANGE_PIECE)).toString('base64');
-            await this.page.evaluate(([id, o, b]) => window.engine.range(id, o, b), [jobId, off, piece]);
+            await this.page.evaluate(([id, b0, b1, o, b]) => window.engine.range(id, b0, b1, o, b), [jobId, begin, end, off, piece]);
           }
         }
         await new Promise((r) => setTimeout(r, 20));

@@ -82,9 +82,17 @@
 
   // Joins wrapped lines into paragraphs and repairs words hyphenated across line breaks.
   function linesToParagraphs(lines) {
-    lines = lines.map(cleanSpaces).filter(function (l) {
-      return l.length > 0 && !/^\d{1,4}$/.test(l);
-    });
+    lines = lines
+      .map(function (l) {
+        // Scans leave stray rules and specks at the edges of lines ("| nu hatırlatmayı", "olmalı. :").
+        return cleanSpaces(l)
+          .replace(/^[|¦]\s+/, '')
+          .replace(/\s+[|¦:]$/, '');
+      })
+      .filter(function (l) {
+        // Page numbers, also when a scan framed them: "12", "[122", "- 7 -".
+        return l.length > 0 && !/^[^\p{L}\p{N}]*\d{1,4}[^\p{L}\p{N}]*$/u.test(l);
+      });
     if (!lines.length) return '';
     var maxLen = 0;
     lines.forEach(function (l) {
@@ -977,14 +985,25 @@
       });
       jobs[jobId] = {
         id: jobId, kind: kind, parts: [], marks: [], size: 0, skip: skip, focus: (options && options.focus) || 0,
-        length: (options && options.length) || 0, transport: null,
+        length: (options && options.length) || 0, transport: null, ranges: {},
         ocr: [], ocrTotal: 0, ocrLoop: null, ocrGate: null, ocrWake: null, extracted: false, cancelled: false,
       };
     },
-    // Bytes of a ranged PDF that pdf.js asked for with a 'range' message.
-    range: function (jobId, begin, b64) {
+    // Bytes of a ranged PDF that pdf.js asked for with a 'range' message ({begin, end}). The app sends a request's
+    // bytes in pieces starting at `offset`; pdf.js must get the whole range at once, so pieces are collected here.
+    range: function (jobId, begin, end, offset, b64) {
       var job = jobs[jobId];
-      if (job && job.transport) job.transport.onDataRange(begin, b64ToBytes(b64));
+      if (job && job.transport) {
+        var key = begin + '-' + end;
+        var pending = job.ranges[key] || (job.ranges[key] = { data: new Uint8Array(end - begin), filled: 0 });
+        var piece = b64ToBytes(b64);
+        pending.data.set(piece, offset - begin);
+        pending.filled += piece.length;
+        if (pending.filled >= end - begin) {
+          delete job.ranges[key];
+          job.transport.onDataRange(begin, pending.data);
+        }
+      }
       post({ type: 'ack', jobId: jobId });
     },
     focus: function (jobId, index) {
