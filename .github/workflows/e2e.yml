@@ -122,7 +122,8 @@ jobs:
       - name: Fail if flows failed
         run: test ! -f e2e-out/android/FAILED
       - name: The phone's book reached the computer
-        run: grep "eklendi: Telefon kitabi" e2e-out/android/pc.log
+        run: |
+          grep -F "eklendi: Telefon kitabi" e2e-out/android/pc.log
 
   ios:
     runs-on: macos-latest
@@ -201,4 +202,5 @@ jobs:
       - name: Fail if flows failed
         run: test ! -f e2e-out/ios/FAILED
       - name: The phone's book reached the computer
-        run: grep "eklendi: Telefon kitabi" e2e-out/ios/pc.log
+        run: |
+          grep -F "eklendi: Telefon kitabi" e2e-out/ios/pc.log
