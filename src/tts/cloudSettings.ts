@@ -16,8 +16,12 @@ export async function getApiKey(provider: CloudProvider): Promise<string> {
 export async function setApiKey(provider: CloudProvider, key: string) {
   const trimmed = key.trim();
   cache.set(provider, trimmed);
-  if (trimmed) await SecureStore.setItemAsync(keyName(provider), trimmed);
-  else await SecureStore.deleteItemAsync(keyName(provider));
+  try {
+    if (trimmed) await SecureStore.setItemAsync(keyName(provider), trimmed);
+    else await SecureStore.deleteItemAsync(keyName(provider));
+  } catch {
+    // Without keychain access (e.g. an unsigned build) the key still works until the app is closed.
+  }
 }
 
 // Everything needed to call a provider: the key from the keychain, the server and model from the preferences.

@@ -20,12 +20,11 @@ name: 400 sayfalık taranmış kitap, ortasından okumaya başla
     id: "book-card"
 - tapOn:
     id: "toc-button"
-- scrollUntilVisible:
-    element:
-      text: "Sayfa 300( .*)?"
-    direction: DOWN
-    timeout: 120000
-- tapOn: "Sayfa 300( .*)?"
+- tapOn:
+    id: "goto-input"
+- inputText: "300"
+- tapOn:
+    id: "goto-submit"
 # OCR jumps to the page being read instead of working through the 299 before it.
 - extendedWaitUntil:
     visible: ".*kitabın 300\\. sayfasıdır.*"

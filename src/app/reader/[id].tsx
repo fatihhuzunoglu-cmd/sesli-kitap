@@ -589,6 +589,15 @@ function TocSheet({
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [goTo, setGoTo] = useState('');
+
+  // Long books are easier to open at a page number than to scroll to.
+  const jump = () => {
+    const n = parseInt(goTo, 10);
+    if (!n || n < 1 || n > book.sectionCount) return;
+    setGoTo('');
+    onPick({ sectionIdx: n - 1, sentenceIdx: 0 });
+  };
   const searchToken = useRef(0);
 
   useEffect(() => {
@@ -623,10 +632,32 @@ function TocSheet({
       </View>
       {tab === 'contents' ? (
         <FlatList
+          ListHeaderComponent={
+            book.sectionCount > 20 ? (
+              <View style={s.searchBox}>
+                <Ionicons name="arrow-forward-circle-outline" size={18} color={theme.muted} />
+                <TextInput
+                  value={goTo}
+                  onChangeText={setGoTo}
+                  onSubmitEditing={jump}
+                  placeholder={`${isPaged(book) ? 'Sayfaya' : 'Bölüme'} git (1–${book.sectionCount})`}
+                  placeholderTextColor={theme.muted}
+                  keyboardType="number-pad"
+                  returnKeyType="go"
+                  style={{ flex: 1, color: theme.text, fontSize: 16, paddingVertical: 10 }}
+                  testID="goto-input"
+                />
+                <Pressable onPress={jump} hitSlop={8} testID="goto-submit">
+                  <Text style={{ color: theme.accent, fontWeight: '700' }}>Git</Text>
+                </Pressable>
+              </View>
+            ) : undefined
+          }
+          keyboardShouldPersistTaps="handled"
           data={items}
           keyExtractor={(i) => String(i.idx)}
           initialScrollIndex={items.length ? Math.min(current, items.length - 1) : undefined}
-          getItemLayout={(_, index) => ({ length: 52, offset: 52 * index, index })}
+          getItemLayout={(_, index) => ({ length: 52, offset: 52 * index + (book.sectionCount > 20 ? 64 : 0), index })}
           renderItem={({ item }) => (
             <Pressable style={[s.row, item.idx === current && { backgroundColor: theme.highlight }]} onPress={() => onPick({ sectionIdx: item.idx, sentenceIdx: 0 })}>
               <Text style={s.rowText} numberOfLines={1}>
