@@ -1,0 +1,70 @@
+{
+  "name": "seslikitap-pc",
+  "productName": "Sesli Kitap",
+  "version": "1.3.0",
+  "description": "Sesli Kitap bilgisayar uygulaması: kitapları telefona hazırlar, internetten sesli kitap bulur, telefonla karekodla bağlanır.",
+  "author": "Fatih Uzunoglu",
+  "license": "MIT",
+  "private": true,
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "npm run build && electron .",
+    "serve": "npm run build && node dist/cli.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",
+    "dist": "npm run build && electron-builder --win --x64 --publish never"
+  },
+  "build": {
+    "appId": "com.fatihuzunoglu.seslikitap.pc",
+    "productName": "Sesli Kitap",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "SesliKitap-PC-Kurulum.${ext}",
+      "shortcutName": "Sesli Kitap"
+    },
+    "portable": {
+      "artifactName": "SesliKitap-PC-Tasinabilir.${ext}"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/qrcode": "1.5",
+    "electron": "^37.10.3",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.12",
+    "qrcode": "1.5",
+    "typescript": "5.9"
+  },
+  "allowScripts": {
+    "electron@37.10.3": true,
+    "esbuild@0.25.12": true,
+    "electron-winstaller@5.4.0": true
+  }
+}

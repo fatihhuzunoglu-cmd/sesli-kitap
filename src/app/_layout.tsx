@@ -59,6 +59,9 @@ export default function RootLayout() {
           <Stack.Screen name="reader/[id]" options={{ title: '' }} />
           <Stack.Screen name="voices" options={{ title: 'Sesler' }} />
           <Stack.Screen name="settings" options={{ title: 'Ayarlar' }} />
+          <Stack.Screen name="audio/[id]" options={{ title: '' }} />
+          <Stack.Screen name="discover" options={{ title: 'İnternetten bul' }} />
+          <Stack.Screen name="pc" options={{ title: 'Bilgisayar' }} />
         </Stack>
       </ExtractorProvider>
     </SQLiteProvider>

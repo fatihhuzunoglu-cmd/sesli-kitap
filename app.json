@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sesli Kitap",
     "slug": "sesli-kitap",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -12,7 +12,11 @@
       "infoPlist": {
         "UIBackgroundModes": [
           "audio"
-        ]
+        ],
+        "NSLocalNetworkUsageDescription": "Bilgisayardaki Sesli Kitap ile kitap alıp göndermek için yerel ağa erişim gerekir.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {
@@ -51,6 +55,23 @@
           "dark": {
             "image": "./assets/splash-icon.png",
             "backgroundColor": "#141210"
+          }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Bilgisayardaki karekodu okutup bağlanmak ve sayfaları fotoğraflamak için kameraya erişim gerekir.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-sharing",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
           }
         }
       ],

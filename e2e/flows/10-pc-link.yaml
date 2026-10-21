@@ -1,0 +1,106 @@
+appId: com.fatihuzunoglu.seslikitap
+name: Bilgisayara karekod bağlantısıyla bağlan, hazır kitabı ve sesli kitabı al, telefondan kitap gönder
+---
+# The computer app's server runs on the build machine with a library it prepared itself (a converted scanned PDF
+# and a downloaded audiobook). PCLINK is what its QR code holds; opening it is what scanning does.
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-text"
+- tapOn:
+    id: "paste-title"
+- inputText: "Telefon kitabi"
+- tapOn:
+    id: "paste-text"
+- inputText: "Bu kitap telefondan bilgisayara gider. Orada da okunur."
+- tapOn:
+    id: "paste-submit"
+- extendedWaitUntil:
+    visible:
+      text: "%0 · 1 bölüm.*"
+    timeout: 60000
+- openLink: "${PCLINK}"
+- runFlow:
+    when:
+      visible: "Open|Aç"
+    commands:
+      - tapOn: "Open|Aç"
+- extendedWaitUntil:
+    visible:
+      id: "pc-name"
+    timeout: 30000
+- extendedWaitUntil:
+    visible: "Deneme Masalları"
+    timeout: 30000
+- assertNotVisible:
+    id: "pc-error"
+- takeScreenshot: ${OUT}/28-pc-library
+# Newest first: the audiobook (index 0), then the converted scanned book (index 1).
+- tapOn:
+    id: "pc-get"
+    index: 1
+- extendedWaitUntil:
+    visible: "Kitaplığa eklendi"
+    timeout: 60000
+- tapOn: "Aç"
+- extendedWaitUntil:
+    visible: ".*a wet cat walked in through the door.*"
+    timeout: 30000
+- takeScreenshot: ${OUT}/29-pc-book-reader
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - swipe:
+          start: "1%, 50%"
+          end: "85%, 50%"
+          duration: 400
+- tapOn:
+    id: "pc-get"
+    index: 0
+- extendedWaitUntil:
+    visible:
+      id: "audio-download-status"
+      text: ".*hepsi telefonda.*"
+    timeout: 90000
+- tapOn:
+    id: "audio-play"
+- extendedWaitUntil:
+    visible:
+      id: "audio-time"
+      text: "0:0[2-9]"
+    timeout: 30000
+- tapOn:
+    id: "audio-play"
+- takeScreenshot: ${OUT}/30-pc-audiobook
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - swipe:
+          start: "1%, 50%"
+          end: "85%, 50%"
+          duration: 400
+- scrollUntilVisible:
+    element:
+      id: "pc-send"
+- tapOn:
+    id: "pc-send"
+- extendedWaitUntil:
+    visible: "Bilgisayara gönderildi"
+    timeout: 30000
+- tapOn: "OK|Tamam"
+- assertVisible: "Telefon kitabi"
+- takeScreenshot: ${OUT}/31-pc-sent

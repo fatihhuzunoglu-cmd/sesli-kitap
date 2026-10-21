@@ -1,4 +1,5 @@
-# Builds an unsigned Release .ipa (JS bundle embedded) for sideloading; Sideloadly signs it with the user's Apple ID.
+# Builds an unsigned Release .ipa (JS bundle embedded) for sideloading (Sideloadly signs it with the user's Apple ID),
+# the Android APK and the Windows computer app.
 name: Release builds
 
 on:
@@ -90,4 +91,29 @@ jobs:
         with:
           name: SesliKitap-apk
           path: out/SesliKitap.apk
+          retention-days: 30
+
+  windows-pc:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build extractor engine
+        run: npm run build:engine
+      - name: Build the Windows app (installer and portable)
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SesliKitap-PC
+          path: |
+            desktop/release/SesliKitap-PC-Kurulum.exe
+            desktop/release/SesliKitap-PC-Tasinabilir.exe
           retention-days: 30

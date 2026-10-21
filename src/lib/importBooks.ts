@@ -1,7 +1,8 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, FileMode, Paths } from 'expo-file-system';
 import type { SQLiteDatabase } from 'expo-sqlite';
-import { findTranslation, insertBook, listBookIds, updateBook, type Book, type BookFormat } from '@/db/database';
+import { findTranslation, getSectionsRange, insertBook, insertSections, listBookIds, updateBook, type Book, type BookFormat } from '@/db/database';
+import { buildPackage, PACKAGE_EXTENSION, packageFileName, parsePackage } from './bookPackage';
 import { languageLabel } from './voices';
 
 const EXTENSIONS: Record<string, BookFormat> = {
@@ -23,7 +24,7 @@ const EXTENSIONS: Record<string, BookFormat> = {
 
 export const NOT_YET_SUPPORTED = ['kfx', 'djvu', 'doc', 'rtf', 'cbz', 'cbr', 'odt', 'pages'];
 
-export const SUPPORTED_LABEL = 'PDF, EPUB, MOBI, AZW3, DOCX, FB2, TXT, HTML';
+export const SUPPORTED_LABEL = 'PDF, EPUB, MOBI, AZW3, DOCX, FB2, TXT, HTML, SKITAP';
 
 export type ImportResult = { imported: string[]; rejected: string[] };
 
@@ -42,11 +43,11 @@ function titleFromName(name: string) {
   return (dot > 0 ? base.slice(0, dot) : base).replace(/[_]+/g, ' ').trim() || 'Adsız kitap';
 }
 
-function newId() {
+export function newId() {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function booksDir() {
+export function booksDir() {
   const dir = new Directory(Paths.document, 'books');
   dir.create({ idempotent: true, intermediates: true });
   return dir;
@@ -89,6 +90,10 @@ export async function pickAndImportBooks(db: SQLiteDatabase): Promise<ImportResu
     const source = new File(asset.uri);
     try {
       const ext = extensionOf(asset.name);
+      if (ext === PACKAGE_EXTENSION || (ext === 'json' && isPackage(source))) {
+        imported.push(await importPackage(db, await source.text()));
+        continue;
+      }
       const format = EXTENSIONS[ext] ?? (NOT_YET_SUPPORTED.includes(ext) ? null : sniffFormat(source));
       if (!format) {
         rejected.push(asset.name);
@@ -129,6 +134,67 @@ export async function importFromUrl(db: SQLiteDatabase, rawUrl: string): Promise
   } finally {
     if (tmp.exists) tmp.delete();
   }
+}
+
+function isPackage(file: File) {
+  const handle = file.open(FileMode.ReadOnly);
+  try {
+    return /"type"\s*:\s*"seslikitap"/.test(String.fromCharCode(...handle.readBytesSync(200)));
+  } finally {
+    handle.close();
+  }
+}
+
+// A ready-made book from the computer app or another phone: its text is already there, so it opens at once.
+export async function importPackage(db: SQLiteDatabase, json: string): Promise<string> {
+  const pkg = parsePackage(json);
+  const id = newId();
+  await insertBook(db, { id, title: pkg.title, author: pkg.author, language: pkg.language, format: 'skitap', fileUri: '', size: json.length, originFormat: pkg.origin });
+  await insertSections(
+    db,
+    id,
+    pkg.sections.map((sec, idx) => ({ idx, title: sec.title, text: sec.text, ocr: sec.text.trim() ? 0 : 2 })),
+  );
+  await updateBook(db, id, { section_count: pkg.sections.length, status: 'ready' });
+  return id;
+}
+
+// Downloads a package (from the computer app) and adds it.
+export async function importPackageFromUrl(db: SQLiteDatabase, url: string): Promise<string> {
+  const tmp = new Directory(Paths.cache, `package-${newId()}`);
+  tmp.create({ intermediates: true, idempotent: true });
+  try {
+    const file = await File.downloadFileAsync(url, new File(tmp, `book.${PACKAGE_EXTENSION}`));
+    return await importPackage(db, await file.text());
+  } finally {
+    if (tmp.exists) tmp.delete();
+  }
+}
+
+// The book's text as a package (JSON), for the computer app or for sharing with another phone.
+export async function exportPackage(db: SQLiteDatabase, book: Book): Promise<{ name: string; json: string }> {
+  const rows = await getSectionsRange(db, book.id, 0, Math.max(0, book.sectionCount - 1));
+  if (!rows.length) throw new Error('Bu kitabın henüz hazır sayfası yok.');
+  const origin = book.format === 'translation' ? (book.sourceFormat ?? 'txt') : book.format === 'skitap' ? (book.originFormat ?? 'txt') : book.format;
+  const pkg = buildPackage({
+    title: book.title,
+    author: book.author,
+    language: book.language,
+    origin,
+    sections: rows.map((r) => ({ title: r.title, text: r.text })),
+  });
+  return { name: packageFileName(book.title), json: JSON.stringify(pkg) };
+}
+
+export async function writePackageFile(db: SQLiteDatabase, book: Book): Promise<File> {
+  const { name, json } = await exportPackage(db, book);
+  const dir = new Directory(Paths.cache, 'export');
+  dir.create({ intermediates: true, idempotent: true });
+  const file = new File(dir, name);
+  if (file.exists) file.delete();
+  file.create();
+  await file.write(json);
+  return file;
 }
 
 export async function importText(db: SQLiteDatabase, title: string, text: string): Promise<string> {

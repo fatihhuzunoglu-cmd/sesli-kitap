@@ -29,6 +29,12 @@ jobs:
         run: npx playwright-core install --with-deps chromium webkit
       - name: Extractor engine in Chromium and WebKit
         run: npm run test:engine
+      - name: Computer app (server, pairing, converting in its window)
+        run: |
+          cd desktop
+          ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
+          npm run typecheck
+          npm test
 
   android:
     runs-on: ubuntu-latest
@@ -46,6 +52,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
       - run: npm run build:engine
+      - name: Build the computer app's server
+        run: cd desktop && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci && npm run build
       - name: Generate native Android project
         run: E2E=1 npx expo prebuild --platform android --no-install
       - name: Build release APK
@@ -72,6 +80,13 @@ jobs:
           (nohup python3 e2e/test-server.py 8000 > /tmp/http.log 2>&1 &)
           for i in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/masal.txt && exit 0; sleep 1; done
           echo "test book server did not start" && cat /tmp/http.log && exit 1
+      - name: Computer app converts a scanned book and downloads an audiobook, then serves phones
+        run: |
+          npx playwright-core install --with-deps chromium
+          node desktop/test/prepare-e2e.mjs /tmp/pclib http://127.0.0.1:8000
+          (nohup node desktop/dist/cli.mjs --port 8001 --library /tmp/pclib --token E2EKOD --strict > /tmp/pc.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:8001/api/info?t=E2EKOD" && exit 0; sleep 1; done
+          echo "computer app server did not start" && cat /tmp/pc.log && exit 1
       - name: Run flows on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -94,10 +109,11 @@ jobs:
             adb shell settings list secure | grep -i tts || true
             adb shell cmd package list packages | grep -i -E "tts|speech" || true
             # A second attempt absorbs emulator hiccups; the first attempt's report is kept for review.
-            maestro test e2e/flows -e SERVER=http://10.0.2.2:8000 -e OUT=e2e-out/android --format junit --output e2e-out/android/report-first.xml --test-output-dir e2e-out/android/maestro-first               || maestro test e2e/flows -e SERVER=http://10.0.2.2:8000 -e OUT=e2e-out/android --format junit --output e2e-out/android/report.xml --test-output-dir e2e-out/android/maestro               || echo "MAESTRO_FAILED" > e2e-out/android/FAILED
+            maestro test e2e/flows -e SERVER=http://10.0.2.2:8000 -e "PCLINK=seslikitap://pc?u=http%3A%2F%2F10.0.2.2%3A8001&t=E2EKOD" -e OUT=e2e-out/android --format junit --output e2e-out/android/report-first.xml --test-output-dir e2e-out/android/maestro-first               || maestro test e2e/flows -e SERVER=http://10.0.2.2:8000 -e "PCLINK=seslikitap://pc?u=http%3A%2F%2F10.0.2.2%3A8001&t=E2EKOD" -e OUT=e2e-out/android --format junit --output e2e-out/android/report.xml --test-output-dir e2e-out/android/maestro               || echo "MAESTRO_FAILED" > e2e-out/android/FAILED
             [ -f e2e-out/android/report.xml ] || cp e2e-out/android/report-first.xml e2e-out/android/report.xml
             adb logcat -d > e2e-out/android/logcat.txt
             cp /tmp/http.log e2e-out/android/server.log || true
+            cp /tmp/pc.log e2e-out/android/pc.log || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -105,6 +121,8 @@ jobs:
           path: e2e-out/android
       - name: Fail if flows failed
         run: test ! -f e2e-out/android/FAILED
+      - name: The phone's book reached the computer
+        run: grep "eklendi: Telefon kitabi" e2e-out/android/pc.log
 
   ios:
     runs-on: macos-latest
@@ -124,6 +142,8 @@ jobs:
           java-version: 17
       - run: npm ci
       - run: npm run build:engine
+      - name: Build the computer app's server
+        run: cd desktop && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci && npm run build
       - name: Generate native iOS project
         run: E2E=1 npx expo prebuild --platform ios --no-install
       - name: Install CocoaPods
@@ -156,15 +176,23 @@ jobs:
           (nohup python3 e2e/test-server.py 8000 > /tmp/http.log 2>&1 &)
           for i in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8000/masal.txt && exit 0; sleep 1; done
           echo "test book server did not start" && cat /tmp/http.log && exit 1
+      - name: Computer app converts a scanned book and downloads an audiobook, then serves phones
+        run: |
+          npx playwright-core install chromium
+          node desktop/test/prepare-e2e.mjs /tmp/pclib http://127.0.0.1:8000
+          (nohup node desktop/dist/cli.mjs --port 8001 --library /tmp/pclib --token E2EKOD --strict > /tmp/pc.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:8001/api/info?t=E2EKOD" && exit 0; sleep 1; done
+          echo "computer app server did not start" && cat /tmp/pc.log && exit 1
       - name: Run flows on simulator
         env:
           MAESTRO_DRIVER_STARTUP_TIMEOUT: 300000
         run: |
           mkdir -p e2e-out/ios
-          maestro --device "$UDID" test e2e/flows -e SERVER=http://127.0.0.1:8000 -e OUT=e2e-out/ios --format junit --output e2e-out/ios/report-first.xml --test-output-dir e2e-out/ios/maestro-first             || maestro --device "$UDID" test e2e/flows -e SERVER=http://127.0.0.1:8000 -e OUT=e2e-out/ios --format junit --output e2e-out/ios/report.xml --test-output-dir e2e-out/ios/maestro             || echo "MAESTRO_FAILED" > e2e-out/ios/FAILED
+          maestro --device "$UDID" test e2e/flows -e SERVER=http://127.0.0.1:8000 -e "PCLINK=seslikitap://pc?u=http%3A%2F%2F127.0.0.1%3A8001&t=E2EKOD" -e OUT=e2e-out/ios --format junit --output e2e-out/ios/report-first.xml --test-output-dir e2e-out/ios/maestro-first             || maestro --device "$UDID" test e2e/flows -e SERVER=http://127.0.0.1:8000 -e "PCLINK=seslikitap://pc?u=http%3A%2F%2F127.0.0.1%3A8001&t=E2EKOD" -e OUT=e2e-out/ios --format junit --output e2e-out/ios/report.xml --test-output-dir e2e-out/ios/maestro             || echo "MAESTRO_FAILED" > e2e-out/ios/FAILED
           [ -f e2e-out/ios/report.xml ] || cp e2e-out/ios/report-first.xml e2e-out/ios/report.xml || true
           xcrun simctl spawn "$UDID" log show --last 20m --style compact --predicate 'process CONTAINS "SesliKitap"' > e2e-out/ios/device.log 2>&1 || true
           cp /tmp/http.log e2e-out/ios/server.log || true
+          cp /tmp/pc.log e2e-out/ios/pc.log || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -172,3 +200,5 @@ jobs:
           path: e2e-out/ios
       - name: Fail if flows failed
         run: test ! -f e2e-out/ios/FAILED
+      - name: The phone's book reached the computer
+        run: grep "eklendi: Telefon kitabi" e2e-out/ios/pc.log

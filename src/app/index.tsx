@@ -7,6 +7,7 @@ import { deleteBook, getBook, listBooks, type Book } from '@/db/database';
 import { useExtractor } from '@/engine/ExtractorProvider';
 import { getOcrProgress, useBooksChanged } from '@/engine/booksEvents';
 import * as ImagePicker from 'expo-image-picker';
+import * as Sharing from 'expo-sharing';
 import {
   addPhotosToBook,
   createTranslation,
@@ -17,7 +18,9 @@ import {
   NOT_YET_SUPPORTED,
   pickAndImportBooks,
   SUPPORTED_LABEL,
+  writePackageFile,
 } from '@/lib/importBooks';
+import { PACKAGE_MIME } from '@/lib/bookPackage';
 import { isPaged } from '@/lib/books';
 import { Sheet } from '@/ui/Sheet';
 import { Translator } from '../../modules/translator';
@@ -181,7 +184,28 @@ export default function Library() {
       return [id];
     });
 
+  const share = async (b: Book) => {
+    setActionsFor(null);
+    try {
+      const file = await writePackageFile(db, b);
+      await Sharing.shareAsync(file.uri, { mimeType: PACKAGE_MIME, dialogTitle: b.title, UTI: 'public.json' });
+    } catch (e) {
+      Alert.alert('Paylaşılamadı', (e as Error).message);
+    }
+  };
+
+  // From the add menu: the sheet must be gone before the next screen opens (iOS).
+  const goTo = (pathname: '/discover' | '/pc') => {
+    setMode(null);
+    setTimeout(() => router.push(pathname), 350);
+  };
+
   const open = (b: Book) => {
+    // An audiobook plays from the internet any chapter it could not download, so it opens even after a download error.
+    if (b.format === 'audio') {
+      router.push({ pathname: '/audio/[id]', params: { id: b.id } });
+      return;
+    }
     if (b.status === 'error') {
       Alert.alert('Kitap işlenemedi', b.error ?? '', [
         { text: 'Vazgeç', style: 'cancel' },
@@ -211,7 +235,7 @@ export default function Library() {
   };
 
   const recent = useMemo(
-    () => books?.find((b) => b.lastOpenedAt && b.status !== 'error' && b.processedCount > 0 && b.progress < 1) ?? null,
+    () => books?.find((b) => b.lastOpenedAt && b.format !== 'audio' && b.status !== 'error' && b.processedCount > 0 && b.progress < 1) ?? null,
     [books],
   );
 
@@ -282,6 +306,8 @@ export default function Library() {
           {canTranslate ? (
             <MenuItem theme={t} icon="language-outline" title="Fotoğrafları Türkçeye çevir" body="Yabancı dildeki sayfaları çekin; kitap yapılıp Türkçeye çevrilir" onPress={translatePhotos} testID="add-translate-photos" />
           ) : null}
+          <MenuItem theme={t} icon="globe-outline" title="İnternetten sesli kitap bul" body="Ücretsiz sesli kitapları ve e-kitapları arayıp indirin" onPress={() => goTo('/discover')} testID="add-discover" />
+          <MenuItem theme={t} icon="qr-code-outline" title="Bilgisayardan al" body="Karekodu okutun; bilgisayarda hazırlanan kitapları alın, telefondakileri gönderin" onPress={() => goTo('/pc')} testID="add-pc" />
           <MenuItem theme={t} icon="link-outline" title="Bağlantıdan" body="İnternetteki bir kitap dosyasını indirin" onPress={() => setMode('url')} testID="add-url" />
           <MenuItem theme={t} icon="clipboard-outline" title="Metin yapıştır" body="Bir yazıyı, makaleyi ya da notu dinleyin" onPress={() => setMode('text')} testID="add-text" />
         </View>
@@ -295,6 +321,9 @@ export default function Library() {
             ) : null}
             {actionsFor.format === 'images' ? (
               <MenuItem theme={t} icon="add-circle-outline" title="Sayfa ekle" body="Bu kitabın sonuna yeni sayfa fotoğrafları ekleyin" onPress={() => addPages(actionsFor)} testID="action-add-pages" />
+            ) : null}
+            {actionsFor.format !== 'audio' && actionsFor.processedCount > 0 ? (
+              <MenuItem theme={t} icon="share-outline" title="Paylaş" body="Hazır kitap dosyası (.skitap) olarak başka telefona ya da bilgisayara gönderin" onPress={() => void share(actionsFor)} testID="action-share" />
             ) : null}
             <MenuItem theme={t} icon="trash-outline" title="Sil" body="Kitabı kitaplıktan ve cihazdan kaldırır" onPress={() => confirmDelete(actionsFor)} testID="action-delete" />
           </View>
@@ -388,7 +417,7 @@ function MenuItem({ theme, icon, title, body, onPress, testID }: { theme: Theme;
   );
 }
 
-const FORMAT_LABEL: Partial<Record<Book['format'], string>> = { images: 'FOTOĞRAF', mobi: 'KINDLE', docx: 'WORD', translation: 'ÇEVİRİ' };
+const FORMAT_LABEL: Partial<Record<Book['format'], string>> = { images: 'FOTOĞRAF', mobi: 'KINDLE', docx: 'WORD', translation: 'ÇEVİRİ', skitap: 'HAZIR KİTAP', audio: 'SESLİ KİTAP' };
 
 function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Theme; onPress: () => void; onLongPress: () => void }) {
   const s = styles(theme);
@@ -396,7 +425,12 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
   const unit = isPaged(book) ? 'sayfa' : 'bölüm';
   const ocr = getOcrProgress(book.id);
   let status: string;
-  if (processing) {
+  if (book.format === 'audio') {
+    const missing = book.ocrPendingCount;
+    status = processing
+      ? `İndiriliyor… ${book.sectionCount - missing}/${book.sectionCount} bölüm`
+      : `%${Math.round(book.progress * 100)} · ${book.sectionCount} bölüm${missing ? ` · ${missing} bölüm internetten` : ''}`;
+  } else if (processing) {
     status = ocr
       ? `Metin tanınıyor… ${ocr.done}/${ocr.total} ${unit}`
       : book.format === 'translation'
@@ -410,7 +444,7 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
     status = `%${Math.round(book.progress * 100)} · ${book.sectionCount} ${unit}`;
     if (book.ocrPendingCount > 0) status += ` · ${book.ocrPendingCount} ${unit} metinsiz`;
   }
-  const bar = ocr ? ocr.done / Math.max(1, ocr.total) : processing && book.sectionCount ? book.processedCount / book.sectionCount : book.progress;
+  const bar = book.format === 'audio' ? (processing ? (book.sectionCount - book.ocrPendingCount) / Math.max(1, book.sectionCount) : book.progress) : ocr ? ocr.done / Math.max(1, ocr.total) : processing && book.sectionCount ? book.processedCount / book.sectionCount : book.progress;
   return (
     <Pressable
       style={({ pressed }) => [s.card, pressed && { opacity: 0.7 }]}
@@ -422,7 +456,7 @@ function BookCard({ book, theme, onPress, onLongPress }: { book: Book; theme: Th
     >
       <View style={s.cardTop}>
         <Text style={s.badge}>{FORMAT_LABEL[book.format] ?? book.format.toUpperCase()}</Text>
-        {processing && book.processedCount > 0 && <Text style={s.readable}>Okunabilir</Text>}
+        {processing && book.processedCount > 0 && <Text style={s.readable}>{book.format === 'audio' ? 'Dinlenebilir' : 'Okunabilir'}</Text>}
       </View>
       <Text style={s.title} numberOfLines={2}>
         {book.title}

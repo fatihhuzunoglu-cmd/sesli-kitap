@@ -6,7 +6,8 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { ENGINE_HTML } from './engineHtml.generated';
 import { bytesToBase64 } from '@/lib/base64';
 import { guessLanguage } from '@/lib/text';
-import { getBook, getFinishedSectionIdxs, getSampleText, getSectionTitles, insertSection, listBookIds, updateBook, type Book } from '@/db/database';
+import { getBook, getFinishedSectionIdxs, getSampleText, getSection, getSectionTitles, insertSection, listBookIds, updateBook, type Book } from '@/db/database';
+import { parseTrack, trackFile } from '@/lib/audioBooks';
 import { nextIndex } from '@/lib/translation';
 import { notifyBooksChanged, setOcrProgress } from './booksEvents';
 import { OCR_ASSETS, ocrAssetUri } from './ocrAssets';
@@ -84,6 +85,9 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
   const running = useRef(false);
   const translations = useRef<string[]>([]);
   const translating = useRef(false);
+  // Audiobook downloads have their own queue, so a long download never holds up reading a document.
+  const downloads = useRef<string[]>([]);
+  const downloading = useRef(false);
   const focusOf = useRef(new Map<string, number>());
   // File of each ranged PDF job, read from whenever the engine asks for bytes.
   const rangeFiles = useRef(new Map<string, { file: File; pending: Promise<void> }>());
@@ -203,12 +207,66 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
     [db, stream],
   );
 
+  // Downloads an audiobook's chapters, the one being listened to (and those after it) first. Chapters still
+  // missing play from the internet, so a failed download only leaves the book "incomplete", not unplayable.
+  const downloadAudio = useCallback(
+    async (book: Book) => {
+      const rows = await getSectionTitles(db, book.id);
+      const done = new Set(rows.filter((r) => r.needs_ocr !== 1).map((r) => r.idx));
+      const total = rows.length - done.size;
+      let fetched = 0;
+      let failed = 0;
+      let size = book.size;
+      setOcrProgress(book.id, { done: 0, total });
+      for (;;) {
+        const idx = nextIndex(rows.length, done, focusOf.current.get(book.id) ?? 0);
+        if (idx === null) break;
+        done.add(idx);
+        const section = await getSection(db, book.id, idx);
+        if (!section || !(await getBook(db, book.id))) return;
+        const track = parseTrack(section);
+        const dest = trackFile(book.fileUri, track);
+        try {
+          if (dest.exists) dest.delete();
+          await File.downloadFileAsync(track.url, dest);
+          size += dest.size ?? 0;
+          await insertSection(db, book.id, { idx, title: section.title, text: section.text, ocr: 0 });
+          await updateBook(db, book.id, { size });
+        } catch (e) {
+          failed++;
+          console.warn(`[audio] ${track.url}: ${(e as Error).message}`);
+          if (dest.exists) dest.delete();
+        }
+        setOcrProgress(book.id, { done: ++fetched, total });
+      }
+      if (failed) throw new Error(`${failed} bölüm indirilemedi; bunlar internetten çalınır. İnternet bağlantınızı kontrol edip yeniden deneyin.`);
+    },
+    [db],
+  );
+
   const processBook = useCallback(
     async (bookId: string) => {
       const book = await getBook(db, bookId);
       if (!book) return;
+      // A package arrives with its text; there is nothing to extract.
+      if (book.format === 'skitap') {
+        await updateBook(db, bookId, { status: 'ready', error: null });
+        notifyBooksChanged();
+        return;
+      }
       await updateBook(db, bookId, { status: 'processing', error: null });
       notifyBooksChanged();
+      if (book.format === 'audio') {
+        try {
+          await downloadAudio(book);
+          await updateBook(db, bookId, { status: 'ready' });
+        } catch (e) {
+          await updateBook(db, bookId, { status: 'error', error: (e as Error).message });
+        } finally {
+          setOcrProgress(bookId, null);
+        }
+        return;
+      }
       await ready.current.promise;
 
       const job: BookJob = { id: `${bookId}-${Date.now()}`, bookId, metaLanguage: null, writes: Promise.resolve() };
@@ -231,7 +289,7 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
         notifyBooksChanged();
       }
     },
-    [db, stream, streamPdf, processPhotos],
+    [db, stream, streamPdf, processPhotos, downloadAudio],
   );
 
   const pump = useCallback(async () => {
@@ -243,6 +301,19 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
       }
     } finally {
       running.current = false;
+    }
+  }, [processBook]);
+
+  const pumpDownloads = useCallback(async () => {
+    if (downloading.current) return;
+    downloading.current = true;
+    try {
+      while (downloads.current.length) {
+        await processBook(downloads.current[0]);
+        downloads.current.shift();
+      }
+    } finally {
+      downloading.current = false;
     }
   }, [processBook]);
 
@@ -284,11 +355,16 @@ export function ExtractorProvider({ children }: { children: ReactNode }) {
           void pumpTranslations();
           return;
         }
+        if (book.format === 'audio') {
+          if (!downloads.current.includes(bookId)) downloads.current.push(bookId);
+          void pumpDownloads();
+          return;
+        }
         if (!queue.current.includes(bookId) && active.current?.bookId !== bookId) queue.current.push(bookId);
         void pump();
       });
     },
-    [db, pump, pumpTranslations],
+    [db, pump, pumpTranslations, pumpDownloads],
   );
 
   const onMessage = useCallback(

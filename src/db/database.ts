@@ -1,7 +1,9 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 // 'translation' books have no file: their sections are translated from another book (source_id).
-export type BookFormat = 'pdf' | 'epub' | 'txt' | 'html' | 'fb2' | 'images' | 'docx' | 'mobi' | 'translation';
+// 'skitap' books came as a ready package (text already extracted); origin_format is the format it was made from.
+// 'audio' books are recorded audiobooks: a folder of audio files, one section per chapter (see audioBooks.ts).
+export type BookFormat = 'pdf' | 'epub' | 'txt' | 'html' | 'fb2' | 'images' | 'docx' | 'mobi' | 'translation' | 'skitap' | 'audio';
 export type BookStatus = 'processing' | 'ready' | 'error';
 
 export type Book = {
@@ -24,6 +26,7 @@ export type Book = {
   // Format of the book a translation was made from, which decides whether its sections are pages or chapters.
   sourceFormat: BookFormat | null;
   translateTo: string | null;
+  originFormat: string | null;
 };
 
 // needs_ocr: 0 = text is final, 1 = image page waiting for OCR, 2 = OCR found no text on it.
@@ -73,6 +76,7 @@ const MIGRATIONS: string[] = [
   CREATE INDEX bookmarks_book ON bookmarks(book_id, section_idx, sentence_idx);`,
   `ALTER TABLE books ADD COLUMN source_id TEXT;
   ALTER TABLE books ADD COLUMN translate_to TEXT;`,
+  `ALTER TABLE books ADD COLUMN origin_format TEXT;`,
 ];
 
 export async function migrate(db: SQLiteDatabase) {
@@ -107,13 +111,14 @@ type BookRow = {
   source_id: string | null;
   source_format: BookFormat | null;
   translate_to: string | null;
+  origin_format: string | null;
 };
 
 const BOOK_SELECT = `
   SELECT b.*,
     (SELECT COUNT(*) FROM sections s WHERE s.book_id = b.id) AS processed_count,
     (SELECT COUNT(*) FROM sections s WHERE s.book_id = b.id AND s.needs_ocr > 0) AS ocr_pending_count,
-    (SELECT src.format FROM books src WHERE src.id = b.source_id) AS source_format,
+    (SELECT COALESCE(src.origin_format, src.format) FROM books src WHERE src.id = b.source_id) AS source_format,
     p.section_idx
   FROM books b LEFT JOIN positions p ON p.book_id = b.id`;
 
@@ -138,6 +143,7 @@ function toBook(r: BookRow): Book {
     sourceId: r.source_id,
     sourceFormat: r.source_format,
     translateTo: r.translate_to,
+    originFormat: r.origin_format,
   };
 }
 
@@ -153,11 +159,11 @@ export async function getBook(db: SQLiteDatabase, id: string): Promise<Book | nu
 
 export async function insertBook(
   db: SQLiteDatabase,
-  b: Pick<Book, 'id' | 'title' | 'format' | 'fileUri' | 'size'> & Partial<Pick<Book, 'author' | 'language' | 'sourceId' | 'translateTo'>>,
+  b: Pick<Book, 'id' | 'title' | 'format' | 'fileUri' | 'size'> & Partial<Pick<Book, 'author' | 'language' | 'sourceId' | 'translateTo' | 'originFormat'>>,
 ) {
   await db.runAsync(
-    `INSERT INTO books (id, title, author, format, file_uri, size, language, source_id, translate_to, status, added_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?)`,
+    `INSERT INTO books (id, title, author, format, file_uri, size, language, source_id, translate_to, origin_format, status, added_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?)`,
     b.id,
     b.title,
     b.author ?? null,
@@ -167,6 +173,7 @@ export async function insertBook(
     b.language ?? 'tr',
     b.sourceId ?? null,
     b.translateTo ?? null,
+    b.originFormat ?? null,
     Date.now(),
   );
 }
@@ -223,6 +230,12 @@ export async function insertSection(db: SQLiteDatabase, bookId: string, s: Secti
     s.text,
     s.ocr,
   );
+}
+
+export async function insertSections(db: SQLiteDatabase, bookId: string, sections: SectionInput[]) {
+  await db.withTransactionAsync(async () => {
+    for (const s of sections) await insertSection(db, bookId, s);
+  });
 }
 
 // Sections whose text will not change any more, so a resumed job can skip them.

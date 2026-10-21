@@ -1,0 +1,91 @@
+appId: com.fatihuzunoglu.seslikitap
+name: İnternette sesli kitap ve e-kitap ara, indir, dinle
+---
+# E2E builds search the test server's stand-in for the Internet Archive and Project Gutenberg.
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "empty-add"
+- tapOn:
+    id: "add-discover"
+- tapOn:
+    id: "discover-input"
+- inputText: "masal"
+- tapOn:
+    id: "discover-submit"
+- extendedWaitUntil:
+    visible: "Deneme Masalları"
+    timeout: 30000
+- takeScreenshot: ${OUT}/24-discover-audio
+- tapOn:
+    id: "discover-add"
+- extendedWaitUntil:
+    visible: "Birinci masal"
+    timeout: 30000
+- extendedWaitUntil:
+    visible:
+      id: "audio-download-status"
+      text: ".*hepsi telefonda.*"
+    timeout: 90000
+- tapOn:
+    id: "audio-play"
+- extendedWaitUntil:
+    visible:
+      id: "audio-time"
+      text: "0:0[3-9]"
+    timeout: 30000
+- takeScreenshot: ${OUT}/25-audiobook-playing
+- tapOn:
+    id: "track-1"
+- extendedWaitUntil:
+    visible:
+      id: "audio-time"
+      text: "0:0[2-9]"
+    timeout: 30000
+- assertVisible:
+    id: "audio-track-title"
+    text: "İkinci masal"
+- tapOn:
+    id: "audio-play"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - swipe:
+          start: "1%, 50%"
+          end: "85%, 50%"
+          duration: 400
+- extendedWaitUntil:
+    visible: ".*SESLİ KİTAP.*"
+    timeout: 15000
+- assertVisible: ".*2 bölüm.*"
+- takeScreenshot: ${OUT}/26-library-audiobook
+# A public-domain e-book is added like any other and read with the app's voices.
+- tapOn:
+    id: "add-button"
+- tapOn:
+    id: "add-discover"
+- tapOn:
+    id: "discover-input"
+- inputText: "lighthouse"
+- tapOn:
+    id: "discover-ebook"
+- extendedWaitUntil:
+    visible: "The Lighthouse Keeper"
+    timeout: 30000
+- tapOn:
+    id: "discover-add"
+- extendedWaitUntil:
+    visible: "E-kitap eklendi"
+    timeout: 60000
+- tapOn: "Kitaplığa dön"
+- extendedWaitUntil:
+    visible: ".*%0 · \\d+ bölüm.*"
+    timeout: 120000
+- assertVisible: ".*EPUB.*"
+- takeScreenshot: ${OUT}/27-library-ebook

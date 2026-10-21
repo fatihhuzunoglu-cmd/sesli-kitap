@@ -7,5 +7,5 @@
     }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
-  "exclude": ["node_modules", "engine", "scripts", "test"]
+  "exclude": ["node_modules", "engine", "scripts", "test", "desktop"]
 }
