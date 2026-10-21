@@ -198,7 +198,7 @@ export default function PcScreen() {
                       {it.status === 'downloading' ? ' · bilgisayara iniyor' : ''}
                     </Text>
                   </View>
-                  <Pressable onPress={() => void receive(it)} disabled={busy !== null || it.status !== 'ready'} style={[s.small_btn, (busy !== null || it.status !== 'ready') && { opacity: 0.5 }]} testID="pc-get">
+                  <Pressable onPress={() => void receive(it)} disabled={busy !== null || it.status !== 'ready'} style={[s.small_btn, (busy !== null || it.status !== 'ready') && { opacity: 0.5 }]} testID={`pc-get-${it.kind}-${it.title}`}>
                     {busy === it.id ? <ActivityIndicator color={t.accentText} /> : <Text style={s.smallBtnText}>Telefona al</Text>}
                   </Pressable>
                 </View>

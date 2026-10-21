@@ -52,8 +52,8 @@ function Player({ book, tracks }: { book: Book; tracks: Track[] }) {
   const [current, setCurrent] = useState<number | null>(null);
   const [rate, setRate] = useState(1);
   const [seeking, setSeeking] = useState<number | null>(null);
-  const pendingSeek = useRef<number | null>(null);
   const [wantPlay, setWantPlay] = useState(false);
+  const lockScreen = useRef(false);
   const tracksRef = useRef(tracks);
   useEffect(() => {
     tracksRef.current = tracks;
@@ -64,14 +64,22 @@ function Player({ book, tracks }: { book: Book; tracks: Track[] }) {
       const track = tracksRef.current[idx];
       if (!track) return;
       setCurrent(idx);
-      pendingSeek.current = at > 0 ? at : null;
       setWantPlay(play);
+      player.pause();
       player.replace({ uri: trackSource(book.fileUri, track) });
-      if (play) player.play();
+      // The player swaps the file on its own thread after replace() returns; seeking or starting before that would
+      // act on the chapter being left. (If starting still does not take, the watchdog below starts it.)
+      setTimeout(() => {
+        if (at > 0) void player.seekTo(at);
+        if (play) player.play();
+      }, 300);
       void savePosition(db, book.id, { sectionIdx: idx, sentenceIdx: Math.floor(at) });
       extractor.focus(book.id, idx);
+      const metadata = { title: track.title, artist: book.author ?? undefined, albumTitle: book.title };
       try {
-        player.setActiveForLockScreen(true, { title: track.title, artist: book.author ?? undefined, albumTitle: book.title }, { showSeekForward: true, showSeekBackward: true });
+        if (lockScreen.current) player.updateLockScreenMetadata(metadata);
+        else player.setActiveForLockScreen(true, metadata, { showSeekForward: true, showSeekBackward: true });
+        lockScreen.current = true;
       } catch {}
     },
     [player, book.fileUri, book.id, book.title, book.author, db, extractor],
@@ -87,13 +95,14 @@ function Player({ book, tracks }: { book: Book; tracks: Track[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keeps playing what the listener asked to play: if the player is loaded and idle for a moment though it should
+  // be playing (a chapter switch that did not start), it is started again.
+  const stalled = wantPlay && status.isLoaded && !status.playing && !status.isBuffering && !status.didJustFinish;
   useEffect(() => {
-    if (status.isLoaded && pendingSeek.current !== null) {
-      const at = pendingSeek.current;
-      pendingSeek.current = null;
-      void player.seekTo(at);
-    }
-  }, [status.isLoaded, player]);
+    if (!stalled) return;
+    const timer = setTimeout(() => player.play(), 1500);
+    return () => clearTimeout(timer);
+  }, [stalled, player]);
 
   useEffect(() => {
     player.setPlaybackRate(rate, 'high');
@@ -103,7 +112,10 @@ function Player({ book, tracks }: { book: Book; tracks: Track[] }) {
   useEffect(() => {
     if (!status.didJustFinish || current === null) return;
     if (current + 1 < tracksRef.current.length) load(current + 1, 0, true);
-    else void savePosition(db, book.id, { sectionIdx: current, sentenceIdx: 0 });
+    else {
+      setWantPlay(false);
+      void savePosition(db, book.id, { sectionIdx: current, sentenceIdx: 0 });
+    }
   }, [status.didJustFinish, current, load, db, book.id]);
 
   // The position is saved every few seconds while playing, and when leaving.
@@ -117,6 +129,7 @@ function Player({ book, tracks }: { book: Book; tracks: Track[] }) {
     () => () => {
       try {
         player.clearLockScreenControls();
+        lockScreen.current = false;
       } catch {}
     },
     [player],

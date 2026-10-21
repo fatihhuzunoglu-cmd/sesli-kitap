@@ -37,10 +37,8 @@ name: Bilgisayara karekod bağlantısıyla bağlan, hazır kitabı ve sesli kita
 - assertNotVisible:
     id: "pc-error"
 - takeScreenshot: ${OUT}/28-pc-library
-# Newest first: the audiobook (index 0), then the converted scanned book (index 1).
 - tapOn:
-    id: "pc-get"
-    index: 1
+    id: "pc-get-book-taranmis-kitap"
 - extendedWaitUntil:
     visible: "Kitaplığa eklendi"
     timeout: 60000
@@ -63,8 +61,7 @@ name: Bilgisayara karekod bağlantısıyla bağlan, hazır kitabı ve sesli kita
           end: "85%, 50%"
           duration: 400
 - tapOn:
-    id: "pc-get"
-    index: 0
+    id: "pc-get-audio-Deneme Masalları"
 - extendedWaitUntil:
     visible:
       id: "audio-download-status"
